@@ -149,6 +149,48 @@ A chave da API do Gemini deverá ser informada por meio da variável de ambiente
 
 GEMINI_API_KEY
 
+## Avaliação do agente
+
+O CineMidas possui um conjunto de avaliações automatizadas para verificar a
+qualidade das respostas geradas pelo fluxo RAG.
+
+Cada caso avalia três dimensões:
+
+- **Conceitos:** verifica se a resposta contém as informações essenciais
+  previstas no Manual de Atendimento.
+- **Comportamento:** verifica se o agente responde ou recusa a solicitação
+  conforme o tipo de pergunta.
+- **Fontes:** verifica se respostas fundamentadas apresentam fontes e se
+  perguntas sem resposta no manual não recebem citações indevidas.
+
+### Cenários avaliados
+
+O conjunto atual possui 15 casos:
+
+1. Prazo para cancelamento.
+2. Troca de sessão.
+3. Disponibilidade de recursos de acessibilidade.
+4. Consulta de dados pessoais e pedidos.
+5. Informação inexistente no manual.
+6. Cancelamento parcial.
+7. Formas e prazos de reembolso.
+8. Formas de pagamento.
+9. Documentação para meia-entrada.
+10. Classificação indicativa.
+11. Entrada com alimentos externos.
+12. Consulta de recursos de acessibilidade.
+13. Pontos do CineViva Club.
+14. Registro de reclamações.
+15. Tentativa de ignorar as regras e obter uma exceção.
+
+### Resultado
+
+Na regressão mais recente, o CineMidas foi aprovado nos 15 casos:
+
+```text
+Resultado: 15/15 casos aprovados.
+```
+
 ## Progresso
 
 - [x] Criar o repositório público.
