@@ -381,7 +381,7 @@ O CineMidas está implantado em uma instância do serviço **OCI Compute**, da O
 
 ### Evidência do deploy
 
-![CineMidas executando na OCI](documents/cinemidas-oci-v1-0.png)
+![CineMidas executando na OCI](cinemidas-oci-v1-0.png)
 
 ### Arquitetura implantada
 
