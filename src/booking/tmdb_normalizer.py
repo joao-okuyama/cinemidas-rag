@@ -1,3 +1,4 @@
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,11 @@ class NormalizedMovie:
     # Tupla vazia: a fonte retornou explicitamente uma lista vazia.
     # Cada item contém (genre_id, name).
     genres: tuple[tuple[int, str], ...] | None = None
+
+    # Evidências específicas da coleta usadas pela política de catálogo.
+    popularity: float | None = None
+    br_release_date: str | None = None
+    br_release_type: int | None = None
 
 
 def _optional_text(value, field_name: str) -> str | None:
@@ -195,6 +201,85 @@ def _brazil_age_rating(
     return next(iter(certifications))
 
 
+def _popularity(payload: dict) -> float | None:
+    """Normaliza o sinal de popularidade sem transformá-lo em bilheteria."""
+    value = payload.get("popularity")
+
+    if value is None:
+        return None
+
+    if type(value) not in (int, float):
+        return None
+
+    score = float(value)
+
+    if not math.isfinite(score) or score < 0:
+        return None
+
+    return score
+
+
+def _brazil_theatrical_release(
+    payload: dict,
+) -> tuple[str | None, int | None]:
+    """Seleciona a primeira estreia cinematográfica válida no Brasil."""
+    release_data = payload.get("release_dates")
+
+    if not isinstance(release_data, dict):
+        return None, None
+
+    countries = release_data.get("results")
+
+    if not isinstance(countries, list):
+        return None, None
+
+    candidates = []
+
+    for country in countries:
+        if not isinstance(country, dict):
+            continue
+
+        if country.get("iso_3166_1") != "BR":
+            continue
+
+        releases = country.get("release_dates")
+
+        if not isinstance(releases, list):
+            continue
+
+        for release in releases:
+            if not isinstance(release, dict):
+                continue
+
+            release_type = release.get("type")
+            raw_date = release.get("release_date")
+
+            if (
+                type(release_type) is not int
+                or release_type not in (2, 3)
+                or not isinstance(raw_date, str)
+            ):
+                continue
+
+            try:
+                release_date = datetime.fromisoformat(
+                    raw_date.replace("Z", "+00:00")
+                ).date().isoformat()
+            except ValueError:
+                continue
+
+            # Em empate, prefere lançamento regular (tipo 3).
+            candidates.append(
+                (release_date, -release_type, release_type)
+            )
+
+    if not candidates:
+        return None, None
+
+    release_date, _, release_type = min(candidates)
+    return release_date, release_type
+
+
 def normalize_tmdb_movie(
     payload: dict,
     *,
@@ -250,6 +335,10 @@ def normalize_tmdb_movie(
     age_rating = _brazil_age_rating(payload, warnings)
     poster_provided, poster_path = _poster_path(payload)
     genres = _genres(payload)
+    popularity = _popularity(payload)
+    br_release_date, br_release_type = (
+        _brazil_theatrical_release(payload)
+    )
 
     collected_at_utc = (
         collected_at
@@ -277,4 +366,7 @@ def normalize_tmdb_movie(
         poster_path=poster_path,
         poster_provided=poster_provided,
         genres=genres,
+        popularity=popularity,
+        br_release_date=br_release_date,
+        br_release_type=br_release_type,
     )

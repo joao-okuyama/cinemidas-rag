@@ -1,8 +1,9 @@
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import uuid4
 
-from .normalized_movie_repository import save_normalized_movies
+from .normalized_movie_repository import save_normalized_collection
 from .tmdb_client import TMDBClient
 from .tmdb_normalizer import normalize_tmdb_movie
 
@@ -15,10 +16,12 @@ class TMDBSyncError(RuntimeError):
 
 @dataclass
 class TMDBSyncResult:
+    collection_id: str
     pages_fetched: int
     movies_processed: int
     duplicate_ids: int
     collected_at: str
+    finished_at: str
     warnings: dict[str, tuple[str, ...]]
 
 
@@ -155,15 +158,28 @@ def sync_now_playing(
                 normalized.warnings
             )
 
-    processed = save_normalized_movies(
+    finished_at = datetime.now(timezone.utc)
+    if finished_at < collected_at:
+        finished_at = collected_at
+
+    collection_id = f"TMDB-BR-{uuid4().hex}"
+
+    processed = save_normalized_collection(
         connection,
         normalized_movies,
+        collection_id=collection_id,
+        collected_at=int(collected_at.timestamp()),
+        finished_at=int(finished_at.timestamp()),
+        pages_fetched=pages_fetched,
+        duplicate_ids=duplicate_ids,
     )
 
     return TMDBSyncResult(
+        collection_id=collection_id,
         pages_fetched=pages_fetched,
         movies_processed=processed,
         duplicate_ids=duplicate_ids,
         collected_at=collected_at.isoformat(timespec="seconds"),
+        finished_at=finished_at.isoformat(timespec="seconds"),
         warnings=warnings,
     )
