@@ -224,3 +224,7 @@ data/*.db-journal
 data/*.db-shm
 data/*.db-wal
 cinemidas-v2-*.zip
+
+# CineMidas React frontend
+frontend/node_modules/
+frontend/dist/
