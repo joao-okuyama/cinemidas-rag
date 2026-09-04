@@ -9,6 +9,9 @@ from .tmdb_normalizer import normalize_tmdb_movie
 
 class TMDBSyncError(RuntimeError):
 
+    pass
+
+
 
 @dataclass
 class TMDBSyncResult:
