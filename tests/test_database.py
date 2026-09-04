@@ -224,7 +224,120 @@ class DatabaseTests(unittest.TestCase):
         ).fetchone()[0]
 
         self.assertEqual(timeout_milliseconds, 5000)
+    def test_default_initialization_applies_migrations_once(self):
+        initialize_database(self.connection)
 
+        columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(movies)"
+            )
+        }
+
+        self.assertIn("poster_path", columns)
+
+        tables = {
+            row["name"]
+            for row in self.connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                """
+            )
+        }
+
+        self.assertTrue(
+            {
+                "genres",
+                "movie_genres",
+                "schema_migrations",
+            }.issubset(tables)
+        )
+
+        before = [
+            tuple(row)
+            for row in self.connection.execute(
+                """
+                SELECT migration_id, checksum, applied_at
+                FROM schema_migrations
+                ORDER BY migration_id
+                """
+            )
+        ]
+
+        self.assertEqual(
+            [row[0] for row in before],
+            ["001_movie_presentation.sql"],
+        )
+
+        initialize_database(self.connection)
+
+        after = [
+            tuple(row)
+            for row in self.connection.execute(
+                """
+                SELECT migration_id, checksum, applied_at
+                FROM schema_migrations
+                ORDER BY migration_id
+                """
+            )
+        ]
+
+        self.assertEqual(after, before)
+
+    def test_initialization_upgrades_existing_database_without_data_loss(self):
+        initialize_database(
+            self.connection,
+            migrate=False,
+        )
+
+        original_columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(movies)"
+            )
+        }
+        self.assertNotIn("poster_path", original_columns)
+
+        self.connection.execute(
+            """
+            INSERT INTO movies (
+                movie_id,
+                title,
+                runtime_minutes
+            )
+            VALUES (?, ?, ?)
+            """,
+            (
+                "TEST-LEGACY-MOVIE",
+                "Filme anterior à migração",
+                120,
+            ),
+        )
+        self.connection.commit()
+        self.connection.close()
+
+        reopened_connection = self.open_connection()
+
+        initialize_database(reopened_connection)
+
+        movie = reopened_connection.execute(
+            """
+            SELECT title, runtime_minutes, poster_path
+            FROM movies
+            WHERE movie_id = ?
+            """,
+            ("TEST-LEGACY-MOVIE",),
+        ).fetchone()
+
+        self.assertIsNotNone(movie)
+        self.assertEqual(
+            movie["title"],
+            "Filme anterior à migração",
+        )
+        self.assertEqual(movie["runtime_minutes"], 120)
+        self.assertIsNone(movie["poster_path"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
