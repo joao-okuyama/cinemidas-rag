@@ -60,7 +60,20 @@ class MoviePersistenceTests(unittest.TestCase):
         return [
             dict(row)
             for row in self.connection.execute(
-                "SELECT * FROM movies ORDER BY movie_id"
+                """
+                SELECT
+                    movie_id,
+                    provider,
+                    provider_movie_id,
+                    title,
+                    synopsis,
+                    runtime_minutes,
+                    age_rating,
+                    source_url,
+                    source_updated_at
+                FROM movies
+                ORDER BY movie_id
+                """
             )
         ]
 
