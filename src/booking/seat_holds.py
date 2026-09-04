@@ -58,10 +58,10 @@ def _seat_labels(values: list[str]) -> tuple[str, ...]:
             raise ValueError("Cada assento deve ser informado como texto.")
 
         label = value.strip().upper()
-        match = re.fullmatch(r"([A-J])(1[0-2]|[1-9])", label)
+        match = re.fullmatch(r"([A-J])(0?[1-9]|1[0-2])", label)
         if match is None:
             raise ValueError(f"Assento inválido: {value!r}.")
-        labels.append(label)
+        labels.append(f"{match.group(1)}{int(match.group(2))}")
 
     if len(set(labels)) != len(labels):
         raise ValueError("A solicitação contém assentos repetidos.")

@@ -14,6 +14,11 @@ from src.booking.seat_holds import (
 
 
 class SeatHoldTests(unittest.TestCase):
+    def test_zero_padded_seat_labels_are_normalized(self):
+        from src.booking.seat_holds import _seat_labels
+
+        self.assertEqual(_seat_labels(["F06", "F07"]), ("F6", "F7"))
+
     def test_group_hold_is_atomic_private_expiring_and_releasable(self):
         connection = connect_database(":memory:")
         self.addCleanup(connection.close)
