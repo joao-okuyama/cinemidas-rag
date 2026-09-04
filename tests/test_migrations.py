@@ -1,5 +1,3 @@
-"""Testes do executor e da migração de apresentação dos filmes."""
-
 import sqlite3
 import tempfile
 import unittest
@@ -24,7 +22,7 @@ class MigrationTests(unittest.TestCase):
         self.connection = connect_database(":memory:")
         self.addCleanup(self.connection.close)
 
-        initialize_database(self.connection)
+        initialize_database(self.connection, migrate=False)
 
     def write_migration(self, name, content):
         path = self.directory / name
