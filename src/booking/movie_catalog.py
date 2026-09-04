@@ -109,27 +109,113 @@ def read_movies_csv(csv_path: str | Path) -> list[dict]:
     return movies
 
 
-def import_movies_csv(
+def save_movies(
     connection: sqlite3.Connection,
-    csv_path: str | Path,
+    records: list[dict],
 ) -> int:
-    """Insere ou atualiza filmes, usando movie_id como identidade.
+    """Valida e grava registros completos em uma única transação.
 
-    O arquivo é validado antes de qualquer alteração.
+    Aceita registros do CSV ou de outras fontes já normalizadas.
 
-    A importação inteira ocorre em uma única transação.
-    Se uma gravação falhar, nenhuma alteração do lote é mantida.
+    Atualiza filmes pelo movie_id e não exclui filmes ausentes.
+    Campos opcionais vazios substituem valores anteriores por NULL.
 
-    Campos vazios representam informação desconhecida e substituem
-    valores anteriores por NULL. O CSV deve conter registros completos,
-    não atualizações parciais.
+    Retorna a quantidade de registros processados, não apenas inseridos.
     """
     if connection.in_transaction:
         raise RuntimeError(
-            "Finalize a transação atual antes de importar filmes."
+            "Finalize a transação atual antes de salvar filmes."
         )
 
-    movies = read_movies_csv(csv_path)
+    if not isinstance(records, list) or not records:
+        raise ValueError(
+            "Informe uma lista não vazia de filmes."
+        )
+
+    movies = []
+    seen_movie_ids = set()
+    seen_external_ids = set()
+    expected_fields = set(CSV_COLUMNS)
+
+    for position, record in enumerate(records, start=1):
+        if (
+            not isinstance(record, dict)
+            or set(record) != expected_fields
+        ):
+            raise ValueError(
+                f"Registro {position}: campos diferentes "
+                "dos esperados para o catálogo."
+            )
+
+        # Trabalha sobre uma cópia, preservando os dados do chamador.
+        movie = dict(record)
+
+        for field in CSV_COLUMNS:
+            if field == "runtime_minutes":
+                continue
+
+            value = movie[field]
+
+            if value is not None and not isinstance(value, str):
+                raise ValueError(
+                    f"Registro {position}: {field} deve ser "
+                    "texto ou nulo."
+                )
+
+            movie[field] = (
+                value.strip() or None
+                if value is not None
+                else None
+            )
+
+        movie_id = movie["movie_id"]
+
+        if not movie_id or not movie["title"]:
+            raise ValueError(
+                f"Registro {position}: movie_id e title "
+                "são obrigatórios."
+            )
+
+        if movie_id in seen_movie_ids:
+            raise ValueError(
+                f"Registro {position}: movie_id duplicado no lote."
+            )
+
+        seen_movie_ids.add(movie_id)
+
+        provider = movie["provider"]
+        provider_movie_id = movie["provider_movie_id"]
+
+        if (provider is None) != (provider_movie_id is None):
+            raise ValueError(
+                f"Registro {position}: provider e provider_movie_id "
+                "devem ser preenchidos juntos."
+            )
+
+        if provider is not None:
+            external_id = (provider, provider_movie_id)
+
+            if external_id in seen_external_ids:
+                raise ValueError(
+                    f"Registro {position}: identificador externo "
+                    "duplicado no lote."
+                )
+
+            seen_external_ids.add(external_id)
+
+        runtime = movie["runtime_minutes"]
+
+        if runtime is not None and (
+            type(runtime) is not int
+            or runtime <= 0
+            or runtime > 9223372036854775807
+        ):
+            raise ValueError(
+                f"Registro {position}: runtime_minutes deve ser "
+                "um inteiro positivo ou nulo."
+            )
+
+        movies.append(movie)
 
     statement = """
         INSERT INTO movies (
@@ -175,3 +261,18 @@ def import_movies_csv(
         raise
 
     return len(movies)
+
+
+def import_movies_csv(
+    connection: sqlite3.Connection,
+    csv_path: str | Path,
+) -> int:
+    """Lê o CSV e delega a gravação à função compartilhada."""
+    if connection.in_transaction:
+        raise RuntimeError(
+            "Finalize a transação atual antes de importar filmes."
+        )
+
+    records = read_movies_csv(csv_path)
+
+    return save_movies(connection, records)
