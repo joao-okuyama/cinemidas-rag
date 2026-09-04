@@ -123,6 +123,8 @@ def list_public_catalog(
         movie["genres"] = [genre["name"] for genre in genre_rows]
         movie["poster_url"] = (
             f"{TMDB_POSTER_BASE_URL}{movie['poster_path']}"
+            if movie["poster_path"]
+            else None
         )
         movie["show_session_options"] = (
             visibility.show_session_options
