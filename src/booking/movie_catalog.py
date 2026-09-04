@@ -109,24 +109,11 @@ def read_movies_csv(csv_path: str | Path) -> list[dict]:
     return movies
 
 
-def save_movies(
-    connection: sqlite3.Connection,
-    records: list[dict],
-) -> int:
-    """Valida e grava registros completos em uma única transação.
+def _prepare_movie_records(records: list[dict]) -> list[dict]:
+    """Valida o lote e devolve cópias normalizadas.
 
-    Aceita registros do CSV ou de outras fontes já normalizadas.
-
-    Atualiza filmes pelo movie_id e não exclui filmes ausentes.
-    Campos opcionais vazios substituem valores anteriores por NULL.
-
-    Retorna a quantidade de registros processados, não apenas inseridos.
+    Não acessa o banco e não modifica os registros recebidos.
     """
-    if connection.in_transaction:
-        raise RuntimeError(
-            "Finalize a transação atual antes de salvar filmes."
-        )
-
     if not isinstance(records, list) or not records:
         raise ValueError(
             "Informe uma lista não vazia de filmes."
@@ -147,7 +134,6 @@ def save_movies(
                 "dos esperados para o catálogo."
             )
 
-        # Trabalha sobre uma cópia, preservando os dados do chamador.
         movie = dict(record)
 
         for field in CSV_COLUMNS:
@@ -162,11 +148,10 @@ def save_movies(
                     "texto ou nulo."
                 )
 
-            movie[field] = (
-                value.strip() or None
-                if value is not None
-                else None
-            )
+            if value is None:
+                movie[field] = None
+            else:
+                movie[field] = value.strip() or None
 
         movie_id = movie["movie_id"]
 
@@ -217,7 +202,25 @@ def save_movies(
 
         movies.append(movie)
 
-    statement = """
+    return movies
+
+
+def _write_movie_records(
+    connection: sqlite3.Connection,
+    movies: list[dict],
+) -> None:
+    """Grava registros previamente validados.
+
+    Exige uma transação aberta pelo chamador.
+    Não confirma nem desfaz a transação.
+    """
+    if not connection.in_transaction:
+        raise RuntimeError(
+            "A gravação interna exige uma transação ativa."
+        )
+
+    connection.executemany(
+        """
         INSERT INTO movies (
             movie_id,
             provider,
@@ -249,11 +252,34 @@ def save_movies(
             age_rating = excluded.age_rating,
             source_url = excluded.source_url,
             source_updated_at = excluded.source_updated_at
+        """,
+        movies,
+    )
+
+
+def save_movies(
+    connection: sqlite3.Connection,
+    records: list[dict],
+) -> int:
+    """Valida e grava os campos básicos em uma única transação.
+
+    Atualiza filmes pelo movie_id e não exclui filmes ausentes.
+    Campos básicos opcionais vazios substituem valores por NULL.
+
+    Não altera pôsteres nem associações de gênero.
+
+    Retorna a quantidade de registros processados, não apenas inseridos.
     """
+    if connection.in_transaction:
+        raise RuntimeError(
+            "Finalize a transação atual antes de salvar filmes."
+        )
+
+    movies = _prepare_movie_records(records)
 
     try:
         connection.execute("BEGIN IMMEDIATE")
-        connection.executemany(statement, movies)
+        _write_movie_records(connection, movies)
         connection.commit()
 
     except Exception:
