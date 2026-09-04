@@ -54,6 +54,25 @@ class TraditionalBookingFlow:
             }
         )
 
+    def continue_to_checkout(
+        self,
+        seat_labels: list[str],
+        half_price_seats: list[str] | None = None,
+    ) -> dict:
+        """Reserva os lugares e calcula o pedido em uma ação do usuário."""
+        if not seat_labels:
+            raise ValueError("Selecione pelo menos um assento.")
+
+        half_price = set(half_price_seats or [])
+        if not half_price.issubset(set(seat_labels)):
+            raise ValueError(
+                "A meia-entrada deve corresponder a um assento selecionado."
+            )
+
+        hold = self.hold(seat_labels)
+        order = self.checkout(seat_labels, list(half_price))
+        return {"hold": hold, "order": order}
+
     def pay(self, method: str) -> dict:
         payment = self.tools.pay(
             method,

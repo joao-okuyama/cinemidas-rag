@@ -208,37 +208,7 @@ def update_half_price_seats(
     )
 
 
-def traditional_hold_seats(
-    selected_seats: list[str],
-    user_id: str,
-    conversation_id: str,
-):
-    user_id, conversation_id = ensure_web_identity(
-        user_id, conversation_id
-    )
-    connection = connect_database(DATABASE_PATH)
-    try:
-        tools = BookingAgentTools(
-            connection,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            channel="WEB",
-        )
-        hold = TraditionalBookingFlow(tools).hold(selected_seats)
-        labels = ", ".join(hold["seat_labels"])
-        return (
-            f"✅ **{labels}** reservados por 5 minutos. "
-            "Marque abaixo os ingressos de meia-entrada.",
-            user_id,
-            conversation_id,
-        )
-    except Exception as error:
-        return safe_user_error(error), user_id, conversation_id
-    finally:
-        connection.close()
-
-
-def traditional_checkout(
+def traditional_continue(
     selected_seats: list[str],
     half_price_seats: list[str],
     user_id: str,
@@ -255,13 +225,16 @@ def traditional_checkout(
             conversation_id=conversation_id,
             channel="WEB",
         )
-        order = TraditionalBookingFlow(tools).checkout(
+        result = TraditionalBookingFlow(tools).continue_to_checkout(
             selected_seats,
             half_price_seats,
         )
+        order = result["order"]
+        labels = ", ".join(result["hold"]["seat_labels"])
         money = lambda cents: f"R$ {cents / 100:.2f}".replace(".", ",")
         summary = (
             "### Resumo do pedido\n\n"
+            f"Assentos **{labels}** protegidos por 5 minutos.\n\n"
             f"- Subtotal: {money(order['subtotal_cents'])}\n"
             f"- Descontos: {money(order['discount_cents'])}\n"
             f"- Taxas: {money(order['fee_cents'])}\n"
@@ -449,14 +422,13 @@ with gr.Blocks(title="CineMidas v2") as demo:
                 label="3. Assentos",
                 interactive=False,
             )
-            hold_button = gr.Button("Reservar assentos por 5 minutos")
             traditional_half_price = gr.CheckboxGroup(
                 choices=[],
                 label="4. Quais assentos são meia-entrada?",
                 info="Os demais serão cobrados como inteira.",
                 interactive=False,
             )
-            checkout_button = gr.Button("Calcular total")
+            continue_button = gr.Button("Continuar", variant="primary")
             traditional_summary = gr.Markdown("")
             gr.Markdown("### 5. Pagamento simulado")
             with gr.Row():
@@ -499,21 +471,8 @@ with gr.Blocks(title="CineMidas v2") as demo:
                 inputs=[traditional_seats, traditional_half_price],
                 outputs=[traditional_half_price],
             )
-            hold_button.click(
-                traditional_hold_seats,
-                inputs=[
-                    traditional_seats,
-                    user_state,
-                    traditional_conversation_state,
-                ],
-                outputs=[
-                    traditional_status,
-                    user_state,
-                    traditional_conversation_state,
-                ],
-            )
-            checkout_button.click(
-                traditional_checkout,
+            continue_button.click(
+                traditional_continue,
                 inputs=[
                     traditional_seats,
                     traditional_half_price,

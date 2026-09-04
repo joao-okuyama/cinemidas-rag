@@ -77,8 +77,9 @@ class TraditionalFlowTests(unittest.TestCase):
         self.assertIn("F6", seats["available_seats"])
         self.assertIn("TELA", seats["seat_map"])
 
-        flow.hold(["F6", "F7"])
-        order = flow.checkout(["F6", "F7"], ["F7"])
+        checkout = flow.continue_to_checkout(["F6", "F7"], ["F7"])
+        self.assertEqual(checkout["hold"]["seat_labels"], ["F6", "F7"])
+        order = checkout["order"]
         self.assertEqual(order["status"], "AWAITING_PAYMENT")
         self.assertGreater(order["discount_cents"], 0)
 
