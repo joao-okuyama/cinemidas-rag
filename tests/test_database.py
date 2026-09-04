@@ -272,6 +272,7 @@ class DatabaseTests(unittest.TestCase):
                 "001_movie_presentation.sql",
                 "002_catalog_collections.sql",
                 "003_booking_transactions.sql",
+                "004_order_snapshots.sql",
             ],
         )
 

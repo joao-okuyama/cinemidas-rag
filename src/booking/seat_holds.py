@@ -124,6 +124,15 @@ def _expire_holds_in_transaction(
         """,
         expired_ids,
     )
+    connection.execute(
+        f"""
+        UPDATE orders
+        SET status = 'EXPIRED'
+        WHERE status IN ('DRAFT', 'AWAITING_PAYMENT')
+          AND hold_id IN ({placeholders})
+        """,
+        expired_ids,
+    )
     return len(expired_ids)
 
 
@@ -322,6 +331,15 @@ def release_hold(
         )
         connection.execute(
             "UPDATE seat_holds SET status = 'RELEASED' WHERE hold_id = ?",
+            (hold_id,),
+        )
+        connection.execute(
+            """
+            UPDATE orders
+            SET status = 'CANCELLED'
+            WHERE hold_id = ?
+              AND status IN ('DRAFT', 'AWAITING_PAYMENT')
+            """,
             (hold_id,),
         )
         connection.commit()
