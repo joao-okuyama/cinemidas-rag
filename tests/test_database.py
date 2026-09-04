@@ -268,7 +268,10 @@ class DatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             [row[0] for row in before],
-            ["001_movie_presentation.sql"],
+            [
+                "001_movie_presentation.sql",
+                "002_catalog_collections.sql",
+            ],
         )
 
         initialize_database(self.connection)
