@@ -1,11 +1,22 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
 @dataclass
 class NormalizedMovie:
+
     record: dict
     warnings: tuple[str, ...]
+
+    # Mantidos fora de record para preservar o contrato básico/CSV.
+    poster_path: str | None = None
+    poster_provided: bool = False
+
+    # None: informação desconhecida.
+    # Tupla vazia: a fonte retornou explicitamente uma lista vazia.
+    # Cada item contém (genre_id, name).
+    genres: tuple[tuple[int, str], ...] | None = None
 
 
 def _optional_text(value, field_name: str) -> str | None:
@@ -18,6 +29,89 @@ def _optional_text(value, field_name: str) -> str | None:
         )
 
     return value.strip() or None
+
+
+def _poster_path(payload: dict) -> tuple[bool, str | None]:
+    """Distingue campo ausente de ausência explícita de pôster."""
+    if "poster_path" not in payload:
+        return False, None
+
+    value = payload["poster_path"]
+
+    if value is None:
+        return True, None
+
+    if not isinstance(value, str):
+        raise ValueError(
+            "poster_path deve ser texto ou nulo."
+        )
+
+    # Aceita somente um caminho relativo com um nome de arquivo.
+    # Não aceita domínio, subpastas, consultas ou caracteres especiais.
+    if (
+        re.fullmatch(r"/[A-Za-z0-9_.-]+", value) is None
+        or ".." in value
+        or value == "/."
+    ):
+        raise ValueError(
+            "poster_path deve ser um caminho relativo de arquivo válido."
+        )
+
+    return True, value
+
+
+def _genres(
+    payload: dict,
+) -> tuple[tuple[int, str], ...] | None:
+    """Valida gêneros e elimina repetições idênticas."""
+    raw_genres = payload.get("genres")
+
+    if raw_genres is None:
+        return None
+
+    if not isinstance(raw_genres, list):
+        raise ValueError("genres deve ser uma lista ou nulo.")
+
+    genres_by_id = {}
+
+    for genre in raw_genres:
+        if not isinstance(genre, dict):
+            raise ValueError(
+                "Cada gênero deve ser um objeto."
+            )
+
+        genre_id = genre.get("id")
+
+        if (
+            type(genre_id) is not int
+            or genre_id <= 0
+            or genre_id > 9223372036854775807
+        ):
+            raise ValueError(
+                "O identificador do gênero deve ser um inteiro positivo."
+            )
+
+        name = _optional_text(
+            genre.get("name"),
+            "genre.name",
+        )
+
+        if name is None:
+            raise ValueError(
+                "O nome do gênero é obrigatório."
+            )
+
+        if (
+            genre_id in genres_by_id
+            and genres_by_id[genre_id] != name
+        ):
+            raise ValueError(
+                "Um mesmo gênero retornou nomes divergentes."
+            )
+
+        genres_by_id[genre_id] = name
+
+    return tuple(sorted(genres_by_id.items()))
 
 
 def _brazil_age_rating(
@@ -106,13 +200,7 @@ def normalize_tmdb_movie(
     *,
     collected_at: datetime,
 ) -> NormalizedMovie:
-    """Transforma detalhes do TMDB em um registro do catálogo.
 
-    Não acessa a rede, não altera o payload e não grava no banco.
-
-    collected_at deve conter fuso horário. A data será convertida
-    para UTC e representa a coleta, não a edição do filme no TMDB.
-    """
     if not isinstance(payload, dict):
         raise ValueError("Os detalhes do filme devem ser um objeto.")
 
@@ -160,6 +248,8 @@ def normalize_tmdb_movie(
         )
 
     age_rating = _brazil_age_rating(payload, warnings)
+    poster_provided, poster_path = _poster_path(payload)
+    genres = _genres(payload)
 
     collected_at_utc = (
         collected_at
@@ -184,4 +274,7 @@ def normalize_tmdb_movie(
     return NormalizedMovie(
         record=record,
         warnings=tuple(warnings),
+        poster_path=poster_path,
+        poster_provided=poster_provided,
+        genres=genres,
     )
