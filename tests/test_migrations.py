@@ -59,7 +59,10 @@ class MigrationTests(unittest.TestCase):
 
         self.assertEqual(
             applied,
-            ["001_movie_presentation.sql"],
+            [
+                "001_movie_presentation.sql",
+                "002_catalog_collections.sql",
+            ],
         )
 
         movie = self.connection.execute(
