@@ -9,6 +9,7 @@ import gradio as gr
 from src.booking.agent_orchestrator import (
     BookingConversationAgent,
     GeminiDecisionPlanner,
+    safe_user_error,
 )
 from src.booking.agent_tools import BookingAgentTools
 from src.booking.database import connect_database
@@ -88,15 +89,24 @@ def chat_with_booking_agent(
             {"role": "user", "content": message.strip()},
             {
                 "role": "assistant",
-                "content": (
-                    "Não consegui concluir essa etapa. Nenhum pagamento real "
-                    "é realizado neste protótipo. Tente reformular o pedido."
-                ),
+                "content": safe_user_error(error),
             },
         ]
         return "", history, current_catalog_html(), user_id, conversation_id
     finally:
         connection.close()
+
+
+def quick_booking_action(message: str):
+    def submit(history: list, user_id: str, conversation_id: str):
+        return chat_with_booking_agent(
+            message,
+            history,
+            user_id,
+            conversation_id,
+        )
+
+    return submit
 
 
 def chat_with_faq(message: str, history: list) -> str:
@@ -174,6 +184,10 @@ with gr.Blocks(title="CineMidas v2") as demo:
                 placeholder="O que você quer assistir?",
                 container=False,
             )
+            with gr.Row():
+                movies_button = gr.Button("🎬 Filmes em cartaz")
+                action_button = gr.Button("🔥 Quero ação")
+                orders_button = gr.Button("🎟️ Meus ingressos")
             recommendations = gr.HTML(current_catalog_html())
 
             booking_input.submit(
@@ -192,6 +206,27 @@ with gr.Blocks(title="CineMidas v2") as demo:
                     conversation_state,
                 ],
             )
+
+            for button, message in (
+                (movies_button, "Mostre os filmes em cartaz"),
+                (action_button, "Quero assistir a um filme de ação"),
+                (orders_button, "Mostre meus ingressos recentes"),
+            ):
+                button.click(
+                    quick_booking_action(message),
+                    inputs=[
+                        booking_chat,
+                        user_state,
+                        conversation_state,
+                    ],
+                    outputs=[
+                        booking_input,
+                        booking_chat,
+                        recommendations,
+                        user_state,
+                        conversation_state,
+                    ],
+                )
 
         with gr.Tab("Dúvidas frequentes"):
             gr.ChatInterface(

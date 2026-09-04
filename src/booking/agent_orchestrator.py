@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable
 from uuid import uuid4
 
 from .agent_tools import BookingAgentTools
+from .seat_holds import SeatUnavailableError
 
 
 ALLOWED_ACTIONS = {
@@ -90,6 +93,76 @@ def _money(cents: int) -> str:
     ).replace("X", ".")
 
 
+def _normalized_text(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value.casefold())
+    return "".join(
+        character
+        for character in decomposed
+        if not unicodedata.combining(character)
+    )
+
+
+def _ordinal_index(message: str) -> int | None:
+    normalized = _normalized_text(message)
+    patterns = (
+        (r"\b(primeir[oa]|1[oaºª]?)\b", 0),
+        (r"\b(segund[oa]|2[oaºª]?)\b", 1),
+        (r"\b(terceir[oa]|3[oaºª]?)\b", 2),
+    )
+    for pattern, index in patterns:
+        if re.search(pattern, normalized):
+            return index
+    if re.search(r"\b(ultim[oa])\b", normalized):
+        return -1
+    return None
+
+
+def _format_session(item: dict, *, now: datetime | None = None) -> str:
+    starts_at = datetime.fromisoformat(item["starts_at_local"])
+    reference = now or datetime.now(timezone.utc)
+    local_reference = reference.astimezone(starts_at.tzinfo)
+    days = (starts_at.date() - local_reference.date()).days
+
+    if days == 0:
+        date_text = "Hoje"
+    elif days == 1:
+        date_text = "Amanhã"
+    else:
+        date_text = starts_at.strftime("%d/%m")
+
+    audio = {
+        "DUBBED": "Dublado",
+        "SUBTITLED": "Legendado",
+    }.get(item["audio_version"], item["audio_version"])
+
+    return (
+        f"**{item['cinema_name']}** · {date_text}, "
+        f"{starts_at:%H:%M} · {item['projection_format']} · {audio}"
+    )
+
+
+def safe_user_error(error: Exception) -> str:
+    """Converte falhas conhecidas em mensagens úteis sem expor segredos."""
+    if isinstance(error, SeatUnavailableError):
+        return str(error) + ". Escolha outros lugares no mapa."
+
+    if isinstance(error, ValueError):
+        message = str(error).strip()
+        if message:
+            return message
+
+    if "GoogleGenerativeAI" in type(error).__name__:
+        return (
+            "O serviço de IA não respondeu. Confira a credencial do Gemini "
+            "ou tente novamente em alguns instantes."
+        )
+
+    return (
+        "Não consegui concluir essa etapa. A reserva anterior foi preservada; "
+        "tente reformular o pedido."
+    )
+
+
 def _extract_json(text: str) -> dict:
     if not isinstance(text, str) or not text.strip():
         raise ValueError("O planejador retornou uma resposta vazia.")
@@ -145,8 +218,13 @@ class GeminiDecisionPlanner:
     def __init__(self, model_name: str = "gemini-3.1-flash-lite"):
         from langchain_google_genai import ChatGoogleGenerativeAI
 
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY não foi configurada.")
+
         self.model = ChatGoogleGenerativeAI(
             model=model_name,
+            google_api_key=api_key,
             temperature=0,
             max_retries=2,
         )
@@ -235,9 +313,27 @@ class BookingConversationAgent:
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Digite uma mensagem para o CineMidas.")
 
-        decision = validate_decision(
-            self.planner(message.strip(), self._context())
-        )
+        message = message.strip()
+        current = self.tools.state()
+        ordinal = _ordinal_index(message)
+
+        if current["state"] == "MOVIE_SELECTED" and ordinal is not None:
+            displayed_sessions = self.tools.sessions(now=self.now, limit=12)
+            if not displayed_sessions:
+                raise ValueError("Não há sessões disponíveis para esse filme.")
+            try:
+                selected = displayed_sessions[ordinal]
+            except IndexError:
+                raise ValueError("A opção indicada não está na lista exibida.") from None
+            decision = {
+                "action": "select_session",
+                "arguments": {"session_id": selected["session_id"]},
+                "reply": "",
+            }
+        else:
+            decision = validate_decision(
+                self.planner(message, self._context())
+            )
         action = decision["action"]
         arguments = decision["arguments"]
         reply = decision["reply"]
@@ -267,9 +363,7 @@ class BookingConversationAgent:
             sessions = self.tools.sessions(now=self.now, limit=12)
             if sessions:
                 lines = "\n".join(
-                    f"- **{item['cinema_name']}** · "
-                    f"{item['starts_at_local']} · "
-                    f"{item['projection_format']} · {item['audio_version']}"
+                    f"- {_format_session(item, now=self.now)}"
                     for item in sessions
                 )
                 text = f"Você escolheu **{movie['title']}**.\n\n{lines}"
@@ -280,8 +374,7 @@ class BookingConversationAgent:
         if action == "sessions":
             sessions = self.tools.sessions(now=self.now, **arguments)
             text = "\n".join(
-                f"- **{item['cinema_name']}** · {item['starts_at_local']} · "
-                f"{item['projection_format']} · {item['audio_version']}"
+                f"- {_format_session(item, now=self.now)}"
                 for item in sessions
             ) or "Não há sessões disponíveis para esse filtro."
             return AgentTurn(text, self.tools.state(), "sessions", sessions)
@@ -290,8 +383,8 @@ class BookingConversationAgent:
             session = self.tools.select_session(now=self.now, **arguments)
             seat_map = self.tools.seat_map(now=self.now)
             text = (
-                f"Sessão selecionada: **{session['cinema_name']}**, "
-                f"{session['starts_at_local']}.\n\n"
+                "Sessão selecionada: "
+                f"{_format_session(session, now=self.now)}.\n\n"
                 "Escolha os assentos disponíveis:\n\n```\n"
                 + seat_map["text"]
                 + "\n```"

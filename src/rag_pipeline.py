@@ -136,7 +136,9 @@ class CineMidasRAG:
         self,
         model_name: str = "gemini-3.1-flash-lite",
     ) -> None:
-        if not os.getenv("GEMINI_API_KEY"):
+        api_key = os.getenv("GEMINI_API_KEY")
+
+        if not api_key:
             raise RuntimeError(
                 "A variável de ambiente GEMINI_API_KEY não foi configurada."
             )
@@ -144,7 +146,8 @@ class CineMidasRAG:
         self.chunks = load_cinemidas_chunks()
 
         self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-001"
+            model="models/gemini-embedding-001",
+            google_api_key=api_key,
         )
 
         self.vector_store = InMemoryVectorStore(
@@ -161,6 +164,7 @@ class CineMidasRAG:
 
         self.llm = ChatGoogleGenerativeAI(
             model=model_name,
+            google_api_key=api_key,
             temperature=0,
             max_retries=2,
         )

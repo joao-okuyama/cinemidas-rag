@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from src.booking.agent_orchestrator import (
     BookingConversationAgent,
+    safe_user_error,
     validate_decision,
 )
 from src.booking.agent_tools import BookingAgentTools
@@ -105,6 +106,38 @@ class AgentOrchestratorTests(unittest.TestCase):
                     },
                 }
             )
+
+    def test_first_session_is_selected_without_calling_model(self):
+        self.tools.select_movie("TMDB-101", now=self.now)
+        expected = self.tools.sessions(now=self.now, limit=12)[0]
+
+        def forbidden_planner(_message, _context):
+            self.fail("O modelo não deve resolver uma opção ordinal simples.")
+
+        agent = BookingConversationAgent(
+            self.tools,
+            forbidden_planner,
+            now=self.now,
+        )
+        turn = agent.handle("Quero o primeiro")
+
+        self.assertEqual(turn.view, "seat_map")
+        self.assertEqual(
+            self.tools.state()["selected_session_id"],
+            expected["session_id"],
+        )
+        self.assertIn("Hoje", turn.text)
+        self.assertNotIn("T13:00", turn.text)
+
+    def test_known_errors_are_specific_and_unknown_errors_are_hidden(self):
+        self.assertEqual(
+            safe_user_error(ValueError("Reserve os assentos primeiro.")),
+            "Reserve os assentos primeiro.",
+        )
+        self.assertNotIn(
+            "segredo interno",
+            safe_user_error(RuntimeError("segredo interno")),
+        )
 
     def test_payment_requires_explicit_user_confirmation(self):
         self.tools.select_movie("TMDB-101", now=self.now)

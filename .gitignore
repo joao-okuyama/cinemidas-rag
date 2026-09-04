@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# CineMidas local runtime
+.gradio/
+data/*.db
+data/*.db-journal
+data/*.db-shm
+data/*.db-wal
+cinemidas-v2-*.zip
