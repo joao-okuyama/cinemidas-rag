@@ -15,6 +15,7 @@ from src.booking.agent_tools import BookingAgentTools
 from src.booking.database import connect_database
 from src.booking.public_catalog import list_public_catalog
 from src.booking.runtime import prepare_booking_runtime
+from src.booking.traditional_flow import TraditionalBookingFlow
 from src.booking.web_presenter import render_catalog_cards
 
 
@@ -47,6 +48,259 @@ def current_catalog_html(limit: int = 12) -> str:
         )
     finally:
         connection.close()
+
+
+def ensure_web_identity(user_id: str, conversation_id: str) -> tuple[str, str]:
+    return (
+        user_id or f"WEB-USER-{uuid4().hex}",
+        conversation_id or f"WEB-SITE-{uuid4().hex}",
+    )
+
+
+def traditional_movie_choices() -> list[tuple[str, str]]:
+    connection = connect_database(DATABASE_PATH)
+    try:
+        movies = list_public_catalog(
+            connection,
+            limit=100,
+            only_bookable=True,
+        )
+        return [(movie["title"], movie["movie_id"]) for movie in movies]
+    finally:
+        connection.close()
+
+
+def session_label(session: dict) -> str:
+    starts_at = session["starts_at_local"]
+    date_text = starts_at[8:10] + "/" + starts_at[5:7]
+    time_text = starts_at[11:16]
+    audio = {
+        "DUBBED": "Dublado",
+        "SUBTITLED": "Legendado",
+    }.get(session["audio_version"], session["audio_version"])
+    price = session["total_full_price_cents"] / 100
+    price_text = f"R$ {price:,.2f}".replace(",", "X").replace(
+        ".", ","
+    ).replace("X", ".")
+    return (
+        f"{session['cinema_name']} · {date_text} às {time_text} · "
+        f"{session['projection_format']} · {audio} · {price_text}"
+    )
+
+
+def traditional_movie_selected(
+    movie_id: str,
+    user_id: str,
+    conversation_id: str,
+):
+    user_id, conversation_id = ensure_web_identity(
+        user_id, conversation_id
+    )
+    if not movie_id:
+        return (
+            gr.Dropdown(choices=[], value=None, interactive=False),
+            "Escolha um filme para ver as sessões.",
+            user_id,
+            conversation_id,
+        )
+
+    connection = connect_database(DATABASE_PATH)
+    try:
+        tools = BookingAgentTools(
+            connection,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            channel="WEB",
+        )
+        result = TraditionalBookingFlow(tools).choose_movie(movie_id)
+        choices = [
+            (session_label(session), session["session_id"])
+            for session in result["sessions"]
+        ]
+        message = (
+            f"**{result['movie']['title']}** selecionado. "
+            "Agora escolha uma sessão."
+            if choices
+            else "Este filme não possui sessões futuras no momento."
+        )
+        return (
+            gr.Dropdown(
+                choices=choices,
+                value=None,
+                interactive=bool(choices),
+            ),
+            message,
+            user_id,
+            conversation_id,
+        )
+    except Exception as error:
+        return (
+            gr.Dropdown(choices=[], value=None, interactive=False),
+            safe_user_error(error),
+            user_id,
+            conversation_id,
+        )
+    finally:
+        connection.close()
+
+
+def traditional_session_selected(
+    session_id: str,
+    user_id: str,
+    conversation_id: str,
+):
+    user_id, conversation_id = ensure_web_identity(
+        user_id, conversation_id
+    )
+    if not session_id:
+        return (
+            "Escolha uma sessão para abrir o mapa.",
+            gr.CheckboxGroup(choices=[], value=[], interactive=False),
+            "",
+            user_id,
+            conversation_id,
+        )
+
+    connection = connect_database(DATABASE_PATH)
+    try:
+        tools = BookingAgentTools(
+            connection,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            channel="WEB",
+        )
+        result = TraditionalBookingFlow(tools).choose_session(session_id)
+        return (
+            "```text\n" + result["seat_map"] + "\n```",
+            gr.CheckboxGroup(
+                choices=result["available_seats"],
+                value=[],
+                interactive=True,
+            ),
+            "Sessão selecionada. Marque um ou mais assentos disponíveis.",
+            user_id,
+            conversation_id,
+        )
+    except Exception as error:
+        return (
+            safe_user_error(error),
+            gr.CheckboxGroup(choices=[], value=[], interactive=False),
+            "",
+            user_id,
+            conversation_id,
+        )
+    finally:
+        connection.close()
+
+
+def update_half_price_seats(
+    selected_seats: list[str] | None,
+    current_half_price: list[str] | None,
+):
+    selected = selected_seats or []
+    retained = [
+        seat for seat in (current_half_price or []) if seat in selected
+    ]
+    return gr.CheckboxGroup(
+        choices=selected,
+        value=retained,
+        interactive=bool(selected),
+    )
+
+
+def traditional_hold_seats(
+    selected_seats: list[str],
+    user_id: str,
+    conversation_id: str,
+):
+    user_id, conversation_id = ensure_web_identity(
+        user_id, conversation_id
+    )
+    connection = connect_database(DATABASE_PATH)
+    try:
+        tools = BookingAgentTools(
+            connection,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            channel="WEB",
+        )
+        hold = TraditionalBookingFlow(tools).hold(selected_seats)
+        labels = ", ".join(hold["seat_labels"])
+        return (
+            f"✅ **{labels}** reservados por 5 minutos. "
+            "Marque abaixo os ingressos de meia-entrada.",
+            user_id,
+            conversation_id,
+        )
+    except Exception as error:
+        return safe_user_error(error), user_id, conversation_id
+    finally:
+        connection.close()
+
+
+def traditional_checkout(
+    selected_seats: list[str],
+    half_price_seats: list[str],
+    user_id: str,
+    conversation_id: str,
+):
+    user_id, conversation_id = ensure_web_identity(
+        user_id, conversation_id
+    )
+    connection = connect_database(DATABASE_PATH)
+    try:
+        tools = BookingAgentTools(
+            connection,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            channel="WEB",
+        )
+        order = TraditionalBookingFlow(tools).checkout(
+            selected_seats,
+            half_price_seats,
+        )
+        money = lambda cents: f"R$ {cents / 100:.2f}".replace(".", ",")
+        summary = (
+            "### Resumo do pedido\n\n"
+            f"- Subtotal: {money(order['subtotal_cents'])}\n"
+            f"- Descontos: {money(order['discount_cents'])}\n"
+            f"- Taxas: {money(order['fee_cents'])}\n"
+            f"- **Total: {money(order['total_cents'])}**\n\n"
+            "Escolha um pagamento simulado para concluir."
+        )
+        return summary, user_id, conversation_id
+    except Exception as error:
+        return safe_user_error(error), user_id, conversation_id
+    finally:
+        connection.close()
+
+
+def traditional_payment(method: str):
+    def pay(user_id: str, conversation_id: str):
+        user_id, conversation_id = ensure_web_identity(
+            user_id, conversation_id
+        )
+        connection = connect_database(DATABASE_PATH)
+        try:
+            tools = BookingAgentTools(
+                connection,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                channel="WEB",
+            )
+            result = TraditionalBookingFlow(tools).pay(method)
+            return (
+                "✅ Pagamento **simulado** aprovado.\n\n"
+                + result["voucher"],
+                user_id,
+                conversation_id,
+            )
+        except Exception as error:
+            return safe_user_error(error), user_id, conversation_id
+        finally:
+            connection.close()
+
+    return pay
 
 
 def chat_with_booking_agent(
@@ -159,6 +413,7 @@ with gr.Blocks(title="CineMidas v2") as demo:
 
     user_state = gr.State("")
     conversation_state = gr.State("")
+    traditional_conversation_state = gr.State("")
 
     with gr.Tabs():
         with gr.Tab("Em cartaz"):
@@ -167,6 +422,124 @@ with gr.Blocks(title="CineMidas v2") as demo:
                 "A disponibilidade nas unidades CineViva é simulada."
             )
             catalog_gallery = gr.HTML(current_catalog_html())
+
+        with gr.Tab("Compra tradicional"):
+            gr.Markdown(
+                "## Compre escolhendo cada etapa\n"
+                "A mesma reserva também ficará disponível para o agente."
+            )
+            traditional_movie = gr.Dropdown(
+                choices=traditional_movie_choices(),
+                label="1. Filme",
+                info="Somente filmes com sessões simuladas disponíveis.",
+            )
+            traditional_session = gr.Dropdown(
+                choices=[],
+                label="2. Cinema e sessão",
+                interactive=False,
+            )
+            traditional_status = gr.Markdown(
+                "Escolha um filme para começar."
+            )
+            traditional_map = gr.Markdown(
+                "O mapa de assentos aparecerá aqui."
+            )
+            traditional_seats = gr.CheckboxGroup(
+                choices=[],
+                label="3. Assentos",
+                interactive=False,
+            )
+            hold_button = gr.Button("Reservar assentos por 5 minutos")
+            traditional_half_price = gr.CheckboxGroup(
+                choices=[],
+                label="4. Quais assentos são meia-entrada?",
+                info="Os demais serão cobrados como inteira.",
+                interactive=False,
+            )
+            checkout_button = gr.Button("Calcular total")
+            traditional_summary = gr.Markdown("")
+            gr.Markdown("### 5. Pagamento simulado")
+            with gr.Row():
+                pix_button = gr.Button("PIX")
+                card_button = gr.Button("Cartão")
+                loyalty_button = gr.Button("Pontos CineViva")
+            traditional_voucher = gr.Markdown("")
+
+            traditional_movie.change(
+                traditional_movie_selected,
+                inputs=[
+                    traditional_movie,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+                outputs=[
+                    traditional_session,
+                    traditional_status,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+            )
+            traditional_session.change(
+                traditional_session_selected,
+                inputs=[
+                    traditional_session,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+                outputs=[
+                    traditional_map,
+                    traditional_seats,
+                    traditional_status,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+            )
+            traditional_seats.change(
+                update_half_price_seats,
+                inputs=[traditional_seats, traditional_half_price],
+                outputs=[traditional_half_price],
+            )
+            hold_button.click(
+                traditional_hold_seats,
+                inputs=[
+                    traditional_seats,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+                outputs=[
+                    traditional_status,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+            )
+            checkout_button.click(
+                traditional_checkout,
+                inputs=[
+                    traditional_seats,
+                    traditional_half_price,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+                outputs=[
+                    traditional_summary,
+                    user_state,
+                    traditional_conversation_state,
+                ],
+            )
+            for button, method in (
+                (pix_button, "PIX_MOCK"),
+                (card_button, "CARD_MOCK"),
+                (loyalty_button, "LOYALTY_MOCK"),
+            ):
+                button.click(
+                    traditional_payment(method),
+                    inputs=[user_state, traditional_conversation_state],
+                    outputs=[
+                        traditional_voucher,
+                        user_state,
+                        traditional_conversation_state,
+                    ],
+                )
 
         with gr.Tab("Comprar com IA"):
             gr.Markdown(
