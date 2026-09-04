@@ -64,6 +64,7 @@ class MigrationTests(unittest.TestCase):
                 "002_catalog_collections.sql",
                 "003_booking_transactions.sql",
                 "004_order_snapshots.sql",
+                "005_conversation_sessions.sql",
             ],
         )
 
