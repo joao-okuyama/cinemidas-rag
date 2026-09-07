@@ -170,6 +170,114 @@ class AgentOrchestratorTests(unittest.TestCase):
             order["order_id"],
         )
 
+    # ── Regression: Bug #1 — questions must NOT confirm payment ──
+
+    def test_question_about_payment_does_not_confirm(self):
+        """Mensagens interrogativas sobre pagamento não devem disparar pay."""
+        questions = [
+            "Como funciona o pagamento com PIX?",
+            "Se eu confirmar o pagamento com PIX, o que acontece?",
+            "Qual o prazo de pagamento?",
+            "Quanto custa o pagamento com cartão?",
+            "O que é pagamento com pontos?",
+        ]
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertFalse(
+                    BookingConversationAgent._payment_confirmed(question),
+                    f"Should NOT confirm: {question!r}",
+                )
+
+    def test_explicit_confirmation_still_works(self):
+        """Confirmações explícitas e legítimas devem continuar funcionando."""
+        confirmations = [
+            "Confirmo o pagamento com PIX",
+            "Pode pagar com cartão",
+            "Pagar com pix",
+            "Confirmar pagamento",
+            "Quero pagar com pontos",
+            "Finalizar com pix",
+        ]
+        for msg in confirmations:
+            with self.subTest(msg=msg):
+                self.assertTrue(
+                    BookingConversationAgent._payment_confirmed(msg),
+                    f"Should confirm: {msg!r}",
+                )
+
+    # ── Regression: Bug #2 — inteira/meia parsed individually ──
+
+    def _setup_held_seats(self, labels):
+        """Helper: set up movie → session → held seats, return agent."""
+        self.tools.select_movie("TMDB-101", now=self.now)
+        session = self.tools.sessions(now=self.now)[0]
+        self.tools.select_session(session["session_id"], now=self.now)
+        self.tools.hold_seats(labels, now=self.now)
+
+        def forbidden_planner(_message, _context):
+            self.fail("The model should not be called for deterministic shortcuts.")
+
+        return BookingConversationAgent(
+            self.tools, forbidden_planner, now=self.now,
+        )
+
+    def test_f6_inteira_e_f7_meia_parsed_correctly(self):
+        agent = self._setup_held_seats(["F6", "F7"])
+        decision = agent.decide("F6 inteira e F7 meia")
+        self.assertEqual(decision["action"], "checkout")
+        types = decision["arguments"]["ticket_types"]
+        self.assertEqual(types["F6"], "FULL")
+        self.assertEqual(types["F7"], "HALF")
+
+    def test_f6_e_f7_inteira_all_same_type(self):
+        agent = self._setup_held_seats(["F6", "F7"])
+        decision = agent.decide("F6 e F7 inteira")
+        self.assertEqual(decision["action"], "checkout")
+        types = decision["arguments"]["ticket_types"]
+        self.assertEqual(types["F6"], "FULL")
+        self.assertEqual(types["F7"], "FULL")
+
+    # ── Regression: Bug #3 — "todos inteira/meia" must not crash ──
+
+    def test_todos_inteira_uses_correct_query(self):
+        agent = self._setup_held_seats(["F6", "F7"])
+        decision = agent.decide("Todos inteira")
+        self.assertEqual(decision["action"], "checkout")
+        types = decision["arguments"]["ticket_types"]
+        self.assertEqual(len(types), 2)
+        for label in types.values():
+            self.assertEqual(label, "FULL")
+
+    def test_todos_meia_uses_correct_query(self):
+        agent = self._setup_held_seats(["G3"])
+        decision = agent.decide("tudo meia")
+        self.assertEqual(decision["action"], "checkout")
+        types = decision["arguments"]["ticket_types"]
+        self.assertEqual(len(types), 1)
+        for label in types.values():
+            self.assertEqual(label, "HALF")
+
+    # ── Regression: Bug #4 — _context() with session records in displayed_items ──
+
+    def test_context_does_not_crash_with_session_displayed_items(self):
+        """When displayed_items contains session records (movie_title not title),
+        _context() must not raise KeyError."""
+        self.tools.select_movie("TMDB-101", now=self.now)
+        sessions = self.tools.sessions(now=self.now, limit=3)
+        self.tools.remember_options("sessions", sessions)
+
+        agent = BookingConversationAgent(
+            self.tools,
+            lambda _m, _c: {"action": "help", "arguments": {}, "reply": "ok"},
+            now=self.now,
+        )
+        # This should NOT raise KeyError: 'title'
+        context = agent._context()
+        self.assertIn("catalog", context)
+        for movie in context["catalog"]:
+            self.assertIn("title", movie)
+            self.assertIn("movie_id", movie)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

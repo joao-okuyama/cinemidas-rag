@@ -290,13 +290,16 @@ class BookingConversationAgent:
         displayed_items = displayed.get("items") or []
         known_ids = {m["movie_id"] for m in catalog_movies}
         for item in displayed_items:
-            if isinstance(item, dict) and item.get("movie_id") and item["movie_id"] not in known_ids:
+            if (isinstance(item, dict)
+                    and item.get("movie_id")
+                    and "title" in item
+                    and item["movie_id"] not in known_ids):
                 catalog_movies.append(item)
                 known_ids.add(item["movie_id"])
         context["catalog"] = [
             {
                 "movie_id": movie["movie_id"],
-                "title": movie["title"],
+                "title": movie.get("title", movie.get("movie_title", "")),
                 "genres": movie.get("genres", []),
             }
             for movie in catalog_movies
@@ -325,15 +328,40 @@ class BookingConversationAgent:
     @staticmethod
     def _payment_confirmed(message: str) -> bool:
         normalized = " ".join(_normalized_text(message).split()).strip(" .!")
+
+        # 1. Reject negations
         if re.search(r"\b(nao|not|nunca|recuso|cancelar|cancela)\b", normalized):
             return False
-        has_confirm = bool(re.search(
-            r"\b(confirmo|confirmar|confirmado|pode pagar|pagar|finalizar|sim|ok|quero pagar|pagamento)\b",
+
+        # 2. Reject questions (explicit ? or interrogative words)
+        if "?" in message:
+            return False
+        if re.search(
+            r"\b(como|qual|quais|quando|quanto|onde|por ?que|sera que|"
+            r"o que|what|how|when|where|why)\b",
+            normalized,
+        ):
+            return False
+
+        # 3. Reject conditional / hypothetical phrasing
+        if re.search(r"\b(se eu|se a|caso eu|caso|seria|poderia|gostaria)\b", normalized):
+            return False
+
+        # 4. Require a strong imperative confirmation verb — NOT passive
+        #    words like "pagamento" or "sim" alone
+        has_strong_confirm = bool(re.search(
+            r"\b(confirmo|confirmar|confirmado|pode pagar|pagar|"
+            r"finalizar|quero pagar)\b",
             normalized,
         ))
-        has_method = bool(re.search(r"\b(pix|cartao|credito|debito|pontos)\b", normalized))
-        if has_confirm and (has_method or re.search(r"\bpagamento\b", normalized)):
+        has_method = bool(re.search(
+            r"\b(pix|cartao|credito|debito|pontos)\b", normalized
+        ))
+
+        if has_strong_confirm and has_method:
             return True
+
+        # 5. Strict fullmatch for short imperative phrases
         return bool(re.fullmatch(
             r"(?:eu )?(?:confirmo (?:o )?pagamento|confirmar pagamento|"
             r"pode pagar|pagar|finalizar pagamento|(?:i )?confirm payment|pay)"
@@ -420,30 +448,45 @@ class BookingConversationAgent:
         # Direct ticket type specification when seats are held
         if current["state"] == "SEATS_HELD":
             norm_msg = _normalized_text(message)
-            pairs = re.findall(r"\b([A-Ja-j]\s*0?(?:[1-9]|1[0-2]))\s*[:=\-]?\s*(inteira|meia|full|half)\b", norm_msg)
-            if pairs:
-                types = {}
-                for seat, ttype in pairs:
-                    seat_cleaned = re.sub(r"\s+", "", seat).upper()
-                    types[seat_cleaned] = "HALF" if ttype in {"meia", "half"} else "FULL"
-                return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
-            if re.search(r"\b(todos|todas|ambos|ambas|tudo)\b.*\b(inteira|full)\b", norm_msg):
+
+            # Parse individual seat-type pairs: "F6 inteira e F7 meia"
+            # Strategy: find all seat labels and all type keywords, then pair them.
+            seat_re = re.findall(r"\b([A-Ja-j])\s*0?([1-9]|1[0-2])\b", message)
+            type_re = re.findall(r"\b(inteira|meia|full|half)\b", norm_msg)
+
+            if seat_re and type_re:
+                labels = [f"{row.upper()}{num}" for row, num in seat_re]
+                if len(type_re) == len(labels):
+                    # Each seat has its own type: "F6 inteira e F7 meia"
+                    types = {}
+                    for label, ttype in zip(labels, type_re):
+                        types[label] = "HALF" if ttype in {"meia", "half"} else "FULL"
+                    return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
+                elif len(type_re) == 1:
+                    # Single type for all seats: "F6 e F7 inteira"
+                    ticket = "HALF" if type_re[0] in {"meia", "half"} else "FULL"
+                    types = {label: ticket for label in labels}
+                    return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
+
+            # "todos inteira" / "todos meia" — look up held seats via session_seats + seats
+            if re.search(r"\b(todos|todas|ambos|ambas|tudo)\b", norm_msg):
                 hold_id = current.get("active_hold_id")
-                if hold_id:
+                ticket_type = None
+                if re.search(r"\b(inteira|full)\b", norm_msg):
+                    ticket_type = "FULL"
+                elif re.search(r"\b(meia|half)\b", norm_msg):
+                    ticket_type = "HALF"
+                if hold_id and ticket_type:
                     held = self.tools.connection.execute(
-                        "SELECT seat_label FROM seat_holds WHERE hold_id = ? AND status = 'HELD'", (hold_id,)
+                        """
+                        SELECT s.row_label || s.seat_number AS seat_label
+                        FROM session_seats ss
+                        JOIN seats s ON s.seat_id = ss.seat_id
+                        WHERE ss.hold_id = ? AND ss.status = 'HELD'
+                        """, (hold_id,)
                     ).fetchall()
                     if held:
-                        types = {r["seat_label"]: "FULL" for r in held}
-                        return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
-            if re.search(r"\b(todos|todas|ambos|ambas|tudo)\b.*\b(meia|half)\b", norm_msg):
-                hold_id = current.get("active_hold_id")
-                if hold_id:
-                    held = self.tools.connection.execute(
-                        "SELECT seat_label FROM seat_holds WHERE hold_id = ? AND status = 'HELD'", (hold_id,)
-                    ).fetchall()
-                    if held:
-                        types = {r["seat_label"]: "HALF" for r in held}
+                        types = {r["seat_label"]: ticket_type for r in held}
                         return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
 
         # Direct payment confirmation when awaiting payment
