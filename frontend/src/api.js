@@ -1,9 +1,12 @@
+import { createVisitSession } from "./visitSession";
+
 const BASE = (import.meta.env.VITE_API_BASE_URL || "/api/v1").replace(/\/$/, "");
-const TOKEN_KEY = "cinemidas-guest-token-v2";
-let bootstrap;
+// Discard only the legacy visitor credential, not unrelated browser data.
+try { localStorage.removeItem("cinemidas-guest-token-v2"); } catch { /* Storage may be blocked. */ }
+const visit = createVisitSession(() => post("/guest-session"));
 
 async function request(path, options = {}) {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const token = visit.token;
   const response = await fetch(BASE + path, {
     ...options,
     headers: { "Content-Type": "application/json",
@@ -23,11 +26,7 @@ async function request(path, options = {}) {
 const post = (path, body) => request(path, { method: "POST", body: JSON.stringify(body) });
 
 export const bookingApi = {
-  // Single-flight also avoids creating two visitors under React StrictMode.
-  bootstrap: () => bootstrap ||= post("/guest-session").then((data) => {
-    localStorage.setItem(TOKEN_KEY, data.token);
-    return data;
-  }).catch((error) => { bootstrap = undefined; throw error; }),
+  bootstrap: () => visit.start(),
   catalog: (signal) => request("/catalog?limit=24&only_bookable=true", { signal }),
   booking: () => request("/booking"),
   select: (selection) => post("/booking/selection", selection),

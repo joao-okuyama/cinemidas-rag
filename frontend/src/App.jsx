@@ -45,6 +45,15 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    window.scrollTo(0, 0);
+    // Back/forward cache restores the old document, including its guest token.
+    // Returning to the site must start a new visit, just like a reload.
+    function onPageShow(event) {
+      if (event.persisted) window.location.reload();
+    }
+    window.addEventListener("pageshow", onPageShow);
     async function bootstrap() {
       setBusy(true);
       setError("");
@@ -58,14 +67,8 @@ export default function App() {
         if (sessionData.booking) {
           applyBooking(sessionData.booking);
         }
-        try {
-          const historyData = await bookingApi.history();
-          if (active && historyData.items) {
-            setChatTurns(historyData.items);
-          }
-        } catch {
-          // Guest history is optional on fresh visitor session
-        }
+        // New document = new visit. Do not hydrate a previous conversation.
+        setChatTurns([]);
       } catch (problem) {
         if (active) setError(problem.message);
       } finally {
@@ -75,6 +78,8 @@ export default function App() {
     bootstrap();
     return () => {
       active = false;
+      window.removeEventListener("pageshow", onPageShow);
+      window.history.scrollRestoration = previousScrollRestoration;
     };
   }, []);
 

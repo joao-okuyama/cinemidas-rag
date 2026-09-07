@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import MovieCard from "./MovieCard";
+import MovieCarousel from "./MovieCarousel";
 import SessionPicker from "./SessionPicker";
 import SeatMap from "./SeatMap";
 import Ticket from "./Ticket";
@@ -110,16 +110,7 @@ export default function AgentPanel({
                 <p className="chat-answer">{turn.text}</p>
 
                 {view === "catalog" && Array.isArray(payload) && (
-                  <div className="movie-grid chat-catalog">
-                    {payload.map((movie) => (
-                      <MovieCard
-                        key={movie.movie_id}
-                        movie={movie}
-                        onSelect={handleMovieClick}
-                        disabled={busy}
-                      />
-                    ))}
-                  </div>
+                  <MovieCarousel movies={payload} onSelect={handleMovieClick} disabled={busy} />
                 )}
 
                 {view === "sessions" && Array.isArray(payload) && (
