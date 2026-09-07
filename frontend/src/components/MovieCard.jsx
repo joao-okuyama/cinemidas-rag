@@ -5,6 +5,8 @@ export default function MovieCard({ movie, selected, onSelect, disabled }) {
     ratingLabel(movie.age_rating),
   ].filter(Boolean);
 
+  const hasSessions = movie.show_session_options ?? true;
+
   return (
     <button
       className={`movie-card ${selected ? "movie-card--selected" : ""}`}
@@ -19,7 +21,13 @@ export default function MovieCard({ movie, selected, onSelect, disabled }) {
         ) : (
           <span aria-hidden="true">🎬</span>
         )}
-        <span className="movie-card__availability">Sessões disponíveis</span>
+        <span
+          className={`movie-card__availability ${
+            hasSessions ? "" : "movie-card__availability--none"
+          }`}
+        >
+          {hasSessions ? "Sessões disponíveis" : "Sem sessões"}
+        </span>
       </div>
       <div className="movie-card__body">
         <h3>{movie.title}</h3>

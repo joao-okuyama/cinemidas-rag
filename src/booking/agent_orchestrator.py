@@ -285,23 +285,22 @@ class BookingConversationAgent:
             context["order"] = get_order(self.tools.connection,
                 order_id=state["active_order_id"], user_id=self.tools.user_id)
 
-        if state["state"] in {"DISCOVERY", "MOVIE_SELECTED"}:
-            catalog_movies = list(self.tools.catalog(limit=24, now=self.now))
-            displayed = context.get("displayed_options") or {}
-            displayed_items = displayed.get("items") or []
-            known_ids = {m["movie_id"] for m in catalog_movies}
-            for item in displayed_items:
-                if isinstance(item, dict) and item.get("movie_id") and item["movie_id"] not in known_ids:
-                    catalog_movies.append(item)
-                    known_ids.add(item["movie_id"])
-            context["catalog"] = [
-                {
-                    "movie_id": movie["movie_id"],
-                    "title": movie["title"],
-                    "genres": movie.get("genres", []),
-                }
-                for movie in catalog_movies
-            ]
+        catalog_movies = list(self.tools.catalog(limit=24, now=self.now))
+        displayed = context.get("displayed_options") or {}
+        displayed_items = displayed.get("items") or []
+        known_ids = {m["movie_id"] for m in catalog_movies}
+        for item in displayed_items:
+            if isinstance(item, dict) and item.get("movie_id") and item["movie_id"] not in known_ids:
+                catalog_movies.append(item)
+                known_ids.add(item["movie_id"])
+        context["catalog"] = [
+            {
+                "movie_id": movie["movie_id"],
+                "title": movie["title"],
+                "genres": movie.get("genres", []),
+            }
+            for movie in catalog_movies
+        ]
 
         if state["selected_movie_id"]:
             context["sessions"] = [
@@ -355,15 +354,40 @@ class BookingConversationAgent:
             return {"action": "select_movie" if key == "movie_id" else "select_session",
                     "arguments": {key: selected[key]}, "reply": ""}
 
-        # Direct title match from displayed options (e.g. "quero dois lugares no filme do Akira")
-        if displayed.get("view") == "catalog" and "items" in displayed:
-            norm_msg = _normalized_text(message)
-            for item in sorted(displayed["items"], key=lambda m: len(m.get("title", "")), reverse=True):
+        # Direct movie ID match (e.g. from clicked poster "Quero assistir Homem-Aranha (TMDB-101)")
+        movie_id_match = re.search(r"\b(TMDB-\d+)\b", message, re.IGNORECASE)
+        if movie_id_match:
+            mid = movie_id_match.group(1).upper()
+            return {"action": "select_movie", "arguments": {"movie_id": mid}, "reply": ""}
+
+        # Direct title match from displayed options or catalog (allows changing mind at any time)
+        norm_msg = _normalized_text(message)
+        is_payment_msg = self._payment_confirmed(message)
+        is_seat_msg = bool(re.findall(r"\b[A-Ja-j]\s*0?(?:[1-9]|1[0-2])\b", message))
+
+        if not (is_payment_msg or (is_seat_msg and current["state"] == "SESSION_SELECTED")):
+            displayed_movies = displayed.get("items", []) if displayed.get("view") == "catalog" else []
+            catalog_candidates = list(displayed_movies)
+            known_ids = {m["movie_id"] for m in catalog_candidates if isinstance(m, dict) and "movie_id" in m}
+            for movie in self.tools.catalog(limit=30, now=self.now):
+                if movie["movie_id"] not in known_ids:
+                    catalog_candidates.append(movie)
+                    known_ids.add(movie["movie_id"])
+
+            for item in sorted(catalog_candidates, key=lambda m: len(m.get("title", "")), reverse=True):
                 title = item.get("title", "")
-                if title:
-                    norm_title = _normalized_text(title)
-                    if len(norm_title) >= 3 and norm_title in norm_msg:
-                        return {"action": "select_movie", "arguments": {"movie_id": item["movie_id"]}, "reply": ""}
+                if not title:
+                    continue
+                norm_title = _normalized_text(title)
+                base_title = _normalized_text(re.split(r"[:\-—]", title)[0].strip())
+                matched = False
+                if len(norm_title) >= 3 and norm_title in norm_msg:
+                    matched = True
+                elif len(base_title) >= 4 and base_title in norm_msg:
+                    matched = True
+
+                if matched:
+                    return {"action": "select_movie", "arguments": {"movie_id": item["movie_id"]}, "reply": ""}
 
         # Direct session match from displayed options (e.g. user clicked session or said "19:30" or passed session_id)
         if displayed.get("view") == "sessions" and "items" in displayed:
@@ -465,6 +489,7 @@ class BookingConversationAgent:
                 titles = "\n".join(
                     f"- **{movie['title']}** — "
                     + (", ".join(movie["genres"]) or "gênero não informado")
+                    + ("" if movie.get("show_session_options", True) else " *(sem sessões)*")
                     for movie in movies
                 )
                 text = "Encontrei estas opções:\n\n" + titles
@@ -481,7 +506,10 @@ class BookingConversationAgent:
                 )
                 text = f"Você escolheu **{movie['title']}**.\n\n{lines}"
             else:
-                text = f"**{movie['title']}** está sem sessões disponíveis."
+                text = (
+                    f"**{movie['title']}** está sem sessões disponíveis no momento. "
+                    "Você pode escolher outro filme clicando nos pôsteres acima ou me dizer qual filme procura."
+                )
             return AgentTurn(text, self.tools.state(), "sessions", sessions)
 
         if action == "sessions":

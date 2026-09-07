@@ -190,7 +190,11 @@ class BookingAgentTools:
                     genre_key == name.casefold()
                     for name in movie["genres"]
                 )
-            ]
+        # Prioritize movies that have scheduled sessions available
+        candidates = sorted(
+            candidates,
+            key=lambda m: (not m.get("show_session_options", False), -m.get("popularity", 0)),
+        )
 
         if type(limit) is not int or limit <= 0:
             raise ValueError("limit deve ser um inteiro positivo.")

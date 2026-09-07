@@ -50,7 +50,7 @@ export default function AgentPanel({
 
   function handleMovieClick(movie) {
     if (busy) return;
-    onSend(`Quero assistir ${movie.title}`);
+    onSend(`Quero assistir ${movie.title} (${movie.movie_id})`);
   }
 
   function handleSessionClick(session) {
@@ -116,7 +116,7 @@ export default function AgentPanel({
                         key={movie.movie_id}
                         movie={movie}
                         onSelect={handleMovieClick}
-                        disabled={busy || !isLatest}
+                        disabled={busy}
                       />
                     ))}
                   </div>
@@ -126,7 +126,7 @@ export default function AgentPanel({
                   <SessionPicker
                     sessions={payload}
                     onSelect={handleSessionClick}
-                    disabled={busy || !isLatest}
+                    disabled={busy}
                   />
                 )}
 
