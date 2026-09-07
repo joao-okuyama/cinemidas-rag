@@ -188,6 +188,19 @@ class AgentOrchestratorTests(unittest.TestCase):
                     f"Should NOT confirm: {question!r}",
                 )
 
+    def test_deferred_payment_does_not_confirm(self):
+        """Frases com intenção futura ou condicional NÃO são confirmação."""
+        deferred = [
+            "Vou pagar com PIX amanhã",
+            "Antes de pagar com PIX, preciso conferir os assentos.",
+        ]
+        for msg in deferred:
+            with self.subTest(msg=msg):
+                self.assertFalse(
+                    BookingConversationAgent._payment_confirmed(msg),
+                    f"Should NOT confirm: {msg!r}",
+                )
+
     def test_explicit_confirmation_still_works(self):
         """Confirmações explícitas e legítimas devem continuar funcionando."""
         confirmations = [
@@ -220,6 +233,31 @@ class AgentOrchestratorTests(unittest.TestCase):
         return BookingConversationAgent(
             self.tools, forbidden_planner, now=self.now,
         )
+
+    def _setup_session_selected(self):
+        """Helper: set up movie → session (no held seats), return agent."""
+        self.tools.select_movie("TMDB-101", now=self.now)
+        session = self.tools.sessions(now=self.now)[0]
+        self.tools.select_session(session["session_id"], now=self.now)
+
+        def forbidden_planner(_message, _context):
+            self.fail("The model should not be called for deterministic shortcuts.")
+
+        return BookingConversationAgent(
+            self.tools, forbidden_planner, now=self.now,
+        )
+
+    def test_f6_inteira_f7_meia_from_session_selected(self):
+        """In SESSION_SELECTED state, 'F6 inteira e F7 meia' must pass correct half_price_seats."""
+        agent = self._setup_session_selected()
+        decision = agent.decide("F6 inteira e F7 meia")
+        self.assertEqual(decision["action"], "continue_to_checkout")
+        args = decision["arguments"]
+        self.assertIn("F6", args["seat_labels"])
+        self.assertIn("F7", args["seat_labels"])
+        # F7 is meia, F6 is not
+        self.assertIn("F7", args["half_price_seats"])
+        self.assertNotIn("F6", args["half_price_seats"])
 
     def test_f6_inteira_e_f7_meia_parsed_correctly(self):
         agent = self._setup_held_seats(["F6", "F7"])

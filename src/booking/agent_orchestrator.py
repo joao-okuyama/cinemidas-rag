@@ -347,10 +347,20 @@ class BookingConversationAgent:
         if re.search(r"\b(se eu|se a|caso eu|caso|seria|poderia|gostaria)\b", normalized):
             return False
 
-        # 4. Require a strong imperative confirmation verb — NOT passive
-        #    words like "pagamento" or "sim" alone
+        # 4. Reject temporal deferral and non-imperative qualifiers
+        if re.search(
+            r"\b(amanha|depois|mais tarde|ainda nao|antes de|antes)\b",
+            normalized,
+        ):
+            return False
+        if re.search(r"\b(vou|preciso|queria|gostaria de|pensando)\b", normalized):
+            return False
+
+        # 5. Require a strong imperative confirmation verb
+        #    "pagar" alone is too broad (matches "antes de pagar", "vou pagar");
+        #    only compound forms like "pode pagar" / "quero pagar" qualify.
         has_strong_confirm = bool(re.search(
-            r"\b(confirmo|confirmar|confirmado|pode pagar|pagar|"
+            r"\b(confirmo|confirmar|confirmado|pode pagar|"
             r"finalizar|quero pagar)\b",
             normalized,
         ))
@@ -361,7 +371,7 @@ class BookingConversationAgent:
         if has_strong_confirm and has_method:
             return True
 
-        # 5. Strict fullmatch for short imperative phrases
+        # 6. Strict fullmatch for short imperative phrases
         return bool(re.fullmatch(
             r"(?:eu )?(?:confirmo (?:o )?pagamento|confirmar pagamento|"
             r"pode pagar|pagar|finalizar pagamento|(?:i )?confirm payment|pay)"
@@ -435,12 +445,24 @@ class BookingConversationAgent:
             if seat_matches:
                 labels = [f"{row.upper()}{num}" for row, num in seat_matches]
                 norm_msg = _normalized_text(message)
-                is_checkout = "inteira" in norm_msg or "meia" in norm_msg
-                halves = labels if ("meia" in norm_msg and "inteira" not in norm_msg) else []
-                if is_checkout:
+                type_re = re.findall(r"\b(inteira|meia|full|half)\b", norm_msg)
+                if type_re:
+                    # Has ticket types — go straight to checkout
+                    if len(type_re) == len(labels):
+                        # Each seat has its own type: "F6 inteira e F7 meia"
+                        half_seats = [
+                            label for label, ttype in zip(labels, type_re)
+                            if ttype in {"meia", "half"}
+                        ]
+                    elif len(type_re) == 1:
+                        # Single type for all seats: "F6 e F7 meia"
+                        half_seats = labels if type_re[0] in {"meia", "half"} else []
+                    else:
+                        # Ambiguous — can't pair, just hold seats and ask
+                        half_seats = []
                     return {
                         "action": "continue_to_checkout",
-                        "arguments": {"seat_labels": labels, "half_price_seats": halves},
+                        "arguments": {"seat_labels": labels, "half_price_seats": half_seats},
                         "reply": "",
                     }
                 return {"action": "hold_seats", "arguments": {"seat_labels": labels}, "reply": ""}
