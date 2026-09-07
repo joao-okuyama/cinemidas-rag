@@ -22,6 +22,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [agentOpen, setAgentOpen] = useState(false);
   const [chatTurns, setChatTurns] = useState([]);
+  const [pendingMessage, setPendingMessage] = useState("");
   const [isEditingSeats, setIsEditingSeats] = useState(false);
 
   function applyBooking(snapshot) {
@@ -261,6 +262,7 @@ export default function App() {
 
   async function sendAgentMessage(text) {
     setBusy(true);
+    setPendingMessage(text);
     setError("");
     const requestId = `CHAT-${crypto.randomUUID()}`;
     try {
@@ -274,6 +276,7 @@ export default function App() {
       setError(problem.message);
       return false;
     } finally {
+      setPendingMessage("");
       setBusy(false);
     }
   }
@@ -403,6 +406,7 @@ export default function App() {
         <AgentPanel
           turns={chatTurns}
           busy={busy}
+          pendingMessage={pendingMessage}
           onSend={sendAgentMessage}
           onClose={() => setAgentOpen(false)}
           onMovie={chooseMovie}

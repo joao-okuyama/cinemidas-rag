@@ -5,9 +5,48 @@ import SeatMap from "./SeatMap";
 import Ticket from "./Ticket";
 import { money } from "../format";
 
+function TypewriterAnswer({ text, isLatest }) {
+  const [displayedLength, setDisplayedLength] = useState(isLatest ? 0 : text.length);
+  const [isTyping, setIsTyping] = useState(isLatest && text.length > 0);
+
+  useEffect(() => {
+    if (!isLatest) {
+      setDisplayedLength(text.length);
+      setIsTyping(false);
+      return;
+    }
+
+    setDisplayedLength(0);
+    setIsTyping(true);
+
+    let current = 0;
+    const chunk = Math.max(1, Math.ceil(text.length / 32));
+    const timer = setInterval(() => {
+      current += chunk;
+      if (current >= text.length) {
+        setDisplayedLength(text.length);
+        setIsTyping(false);
+        clearInterval(timer);
+      } else {
+        setDisplayedLength(current);
+      }
+    }, 18);
+
+    return () => clearInterval(timer);
+  }, [text, isLatest]);
+
+  return (
+    <p className="chat-answer">
+      {text.slice(0, displayedLength)}
+      {isTyping && <span className="typing-cursor" aria-hidden="true">▌</span>}
+    </p>
+  );
+}
+
 export default function AgentPanel({
   turns,
   busy,
+  pendingMessage,
   onSend,
   onClose,
   onMovie,
@@ -32,7 +71,7 @@ export default function AgentPanel({
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [turns.length, busy]);
+  }, [turns.length, busy, pendingMessage]);
 
   // Reset local interactive selections when turn changes
   useEffect(() => {
@@ -107,7 +146,7 @@ export default function AgentPanel({
             return (
               <article className="chat-turn" key={entry.id || index}>
                 <p className="chat-user">{entry.message}</p>
-                <p className="chat-answer">{turn.text}</p>
+                <TypewriterAnswer text={turn.text} isLatest={isLatest && !busy} />
 
                 {view === "catalog" && Array.isArray(payload) && (
                   <MovieCarousel movies={payload} onSelect={handleMovieClick} disabled={busy} />
@@ -277,6 +316,24 @@ export default function AgentPanel({
               </article>
             );
           })}
+
+          {pendingMessage && (
+            <article className="chat-turn chat-turn--pending">
+              <p className="chat-user">{pendingMessage}</p>
+              <div className="chat-typing-indicator" aria-label="CineMidas está digitando">
+                <div className="typing-header">
+                  <span className="typing-sparkle">✦</span>
+                  <span className="typing-author">CineMidas</span>
+                  <span className="typing-hint">digitando…</span>
+                </div>
+                <div className="typing-bubble">
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                  <span className="typing-dot"></span>
+                </div>
+              </div>
+            </article>
+          )}
         </div>
         <div ref={end} />
         {children}
