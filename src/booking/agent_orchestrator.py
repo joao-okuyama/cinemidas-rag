@@ -261,6 +261,77 @@ class GeminiDecisionPlanner:
         return validate_decision(_extract_json(response.text))
 
 
+def _parse_ticket_types(
+    message: str,
+    available_seats: list[str] | None = None,
+) -> tuple[dict[str, str] | None, list[str], bool]:
+    """Interpreta atribuições de inteira e meia a assentos.
+
+    Retorna (types_dict, seats_found, is_ambiguous):
+    - types_dict: dict {seat_label: 'FULL' | 'HALF'} se inequívoco, ou None se ambíguo/sem tipos
+    - seats_found: lista de assentos identificados na mensagem ou herdados
+    - is_ambiguous: True se o usuário mencionou tipos mas a correspondência com os assentos é incerta
+    """
+    seat_matches = re.findall(r"\b([A-Ja-j])\s*0?([1-9]|1[0-2])\b", message)
+    seats = [f"{row.upper()}{num}" for row, num in seat_matches]
+    if not seats and available_seats:
+        seats = list(available_seats)
+
+    norm_msg = _normalized_text(message)
+    type_tokens = re.findall(r"\b(inteira|meia|full|half)\b", norm_msg)
+
+    if not type_tokens:
+        return None, seats, False
+
+    # Check for "todos inteira" / "todos meia"
+    if re.search(r"\b(todos|todas|ambos|ambas|tudo)\b", norm_msg) and seats:
+        if re.search(r"\b(inteira|full)\b", norm_msg):
+            return {s: "FULL" for s in seats}, seats, False
+        if re.search(r"\b(meia|half)\b", norm_msg):
+            return {s: "HALF" for s in seats}, seats, False
+
+    # Check for single type mentioned for all seats (e.g. "F6 e F7 inteira", "F6 e F7 meia")
+    if len(type_tokens) == 1 and seats:
+        t = "HALF" if type_tokens[0] in {"meia", "half"} else "FULL"
+        return {s: t for s in seats}, seats, False
+
+    # Try explicit pair matching: "F6 inteira", "F7: meia"
+    pair_matches = re.findall(
+        r"\b([A-Ja-j]\s*0?(?:[1-9]|1[0-2]))\s*[:=\-]?\s*(inteira|meia|full|half)\b",
+        norm_msg,
+    )
+    if pair_matches and len(pair_matches) == len(seats):
+        types = {}
+        for s_raw, t_raw in pair_matches:
+            s_clean = re.sub(r"\s+", "", s_raw).upper()
+            types[s_clean] = "HALF" if t_raw in {"meia", "half"} else "FULL"
+        if set(types.keys()) == set(seats):
+            return types, seats, False
+
+    # Try reverse pair matching: "meia no F6 e inteira no F7"
+    rev_matches = re.findall(
+        r"\b(inteira|meia|full|half)\s*(?:para|no|na|em|pro|pra|do|da)?\s*([A-Ja-j]\s*0?(?:[1-9]|1[0-2]))\b",
+        norm_msg,
+    )
+    if rev_matches and len(rev_matches) == len(seats):
+        types = {}
+        for t_raw, s_raw in rev_matches:
+            s_clean = re.sub(r"\s+", "", s_raw).upper()
+            types[s_clean] = "HALF" if t_raw in {"meia", "half"} else "FULL"
+        if set(types.keys()) == set(seats):
+            return types, seats, False
+
+    # Direct 1:1 positional alignment if counts match exactly: "F6, F7: inteira, meia"
+    if len(type_tokens) == len(seats):
+        types = {}
+        for s, t in zip(seats, type_tokens):
+            types[s] = "HALF" if t in {"meia", "half"} else "FULL"
+        return types, seats, False
+
+    # Multiple types mentioned but doesn't match seat count (e.g. 3 seats, 2 types: "F6, F7 e F8: inteira e meia")
+    return None, seats, True
+
+
 class BookingConversationAgent:
     """Traduz decisões do modelo em chamadas determinísticas."""
 
@@ -353,25 +424,44 @@ class BookingConversationAgent:
             normalized,
         ):
             return False
-        if re.search(r"\b(vou|preciso|queria|gostaria de|pensando)\b", normalized):
+        if re.search(r"\b(vou|preciso|queria|pensando)\b", normalized):
             return False
 
-        # 5. Require a strong imperative confirmation verb
-        #    "pagar" alone is too broad (matches "antes de pagar", "vou pagar");
-        #    only compound forms like "pode pagar" / "quero pagar" qualify.
-        has_strong_confirm = bool(re.search(
-            r"\b(confirmo|confirmar|confirmado|pode pagar|"
-            r"finalizar|quero pagar)\b",
+        # 5. Reject informational intent, doubts, explanations, or meta-references to UI elements
+        if re.search(
+            r"\b(entender|compreender|saber|explicar|explique|explicacao|duvida|duvidas|"
+            r"informacao|informacoes|ajuda|funciona|funcionamento|significa|serve|"
+            r"botao|opcao|link|icone|tela|conferir|olhar|ver|checar|avaliar)\b",
             normalized,
-        ))
+        ):
+            return False
+
+        # 6. Reject prepositional / subordinate constructions ("de confirmar", "para pagar", etc.)
+        cleaned = re.sub(
+            r"\b(de|para|pra|ao|apos|sem|em)\s+(?:o\s+)?(confirmar|pagar|finalizar)\b",
+            "",
+            normalized,
+        )
+
+        # 7. Require explicit confirmation phrasing + payment method
         has_method = bool(re.search(
             r"\b(pix|cartao|credito|debito|pontos)\b", normalized
         ))
 
-        if has_strong_confirm and has_method:
+        has_explicit_confirm = bool(re.search(
+            r"\b(?:eu\s+)?confirmo\b|"
+            r"\bpode\s+(?:pagar|confirmar|finalizar|cobrar|debitar)\b|"
+            r"\bquero\s+(?:pagar|confirmar|finalizar)\b|"
+            r"\b(?:pagar|finalizar)\s+(?:com|via|no|na|por|em)\b|"
+            r"\b(?:confirmar|finalizar|pagar)\s+(?:o\s+)?pagamento\b|"
+            r"\bpode\s+ser\s+(?:com|via|no|por)\b",
+            cleaned,
+        ))
+
+        if has_explicit_confirm and has_method:
             return True
 
-        # 6. Strict fullmatch for short imperative phrases
+        # 8. Strict fullmatch for short imperative phrases
         return bool(re.fullmatch(
             r"(?:eu )?(?:confirmo (?:o )?pagamento|confirmar pagamento|"
             r"pode pagar|pagar|finalizar pagamento|(?:i )?confirm payment|pay)"
@@ -441,75 +531,52 @@ class BookingConversationAgent:
 
         # Direct seat selection match when session is selected (e.g. "g6 e g7" or "quero g6 e g7")
         if current["state"] == "SESSION_SELECTED" and not current.get("active_hold_id"):
-            seat_matches = re.findall(r"\b([A-Ja-j])\s*0?([1-9]|1[0-2])\b", message)
-            if seat_matches:
-                labels = [f"{row.upper()}{num}" for row, num in seat_matches]
-                norm_msg = _normalized_text(message)
-                type_re = re.findall(r"\b(inteira|meia|full|half)\b", norm_msg)
-                if type_re:
-                    # Has ticket types — go straight to checkout
-                    if len(type_re) == len(labels):
-                        # Each seat has its own type: "F6 inteira e F7 meia"
-                        half_seats = [
-                            label for label, ttype in zip(labels, type_re)
-                            if ttype in {"meia", "half"}
-                        ]
-                    elif len(type_re) == 1:
-                        # Single type for all seats: "F6 e F7 meia"
-                        half_seats = labels if type_re[0] in {"meia", "half"} else []
-                    else:
-                        # Ambiguous — can't pair, just hold seats and ask
-                        half_seats = []
+            types_dict, seats, is_ambiguous = _parse_ticket_types(message)
+            if seats:
+                if is_ambiguous:
+                    # Ambiguous types (e.g. "F6, F7 e F8: inteira e meia")
+                    # Reserve seats first without pricing and ask user to clarify
+                    return {"action": "hold_seats", "arguments": {"seat_labels": seats}, "reply": ""}
+                if types_dict:
+                    # Unambiguous types: proceed directly to checkout
+                    half_seats = [s for s, t in types_dict.items() if t == "HALF"]
                     return {
                         "action": "continue_to_checkout",
-                        "arguments": {"seat_labels": labels, "half_price_seats": half_seats},
+                        "arguments": {"seat_labels": seats, "half_price_seats": half_seats},
                         "reply": "",
                     }
-                return {"action": "hold_seats", "arguments": {"seat_labels": labels}, "reply": ""}
+                return {"action": "hold_seats", "arguments": {"seat_labels": seats}, "reply": ""}
 
         # Direct ticket type specification when seats are held
         if current["state"] == "SEATS_HELD":
-            norm_msg = _normalized_text(message)
+            hold_id = current.get("active_hold_id")
+            held_seats = []
+            if hold_id:
+                rows = self.tools.connection.execute(
+                    """
+                    SELECT s.row_label || s.seat_number AS seat_label
+                    FROM session_seats ss
+                    JOIN seats s ON s.seat_id = ss.seat_id
+                    WHERE ss.hold_id = ? AND ss.status = 'HELD'
+                    ORDER BY s.row_label, s.seat_number
+                    """,
+                    (hold_id,),
+                ).fetchall()
+                held_seats = [r["seat_label"] for r in rows]
 
-            # Parse individual seat-type pairs: "F6 inteira e F7 meia"
-            # Strategy: find all seat labels and all type keywords, then pair them.
-            seat_re = re.findall(r"\b([A-Ja-j])\s*0?([1-9]|1[0-2])\b", message)
-            type_re = re.findall(r"\b(inteira|meia|full|half)\b", norm_msg)
+            types_dict, seats, is_ambiguous = _parse_ticket_types(
+                message, available_seats=held_seats
+            )
 
-            if seat_re and type_re:
-                labels = [f"{row.upper()}{num}" for row, num in seat_re]
-                if len(type_re) == len(labels):
-                    # Each seat has its own type: "F6 inteira e F7 meia"
-                    types = {}
-                    for label, ttype in zip(labels, type_re):
-                        types[label] = "HALF" if ttype in {"meia", "half"} else "FULL"
-                    return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
-                elif len(type_re) == 1:
-                    # Single type for all seats: "F6 e F7 inteira"
-                    ticket = "HALF" if type_re[0] in {"meia", "half"} else "FULL"
-                    types = {label: ticket for label in labels}
-                    return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
+            if is_ambiguous:
+                return {
+                    "action": "help",
+                    "arguments": {},
+                    "reply": "Por favor, especifique o tipo para cada assento (por exemplo: F6 inteira e F7 meia).",
+                }
 
-            # "todos inteira" / "todos meia" — look up held seats via session_seats + seats
-            if re.search(r"\b(todos|todas|ambos|ambas|tudo)\b", norm_msg):
-                hold_id = current.get("active_hold_id")
-                ticket_type = None
-                if re.search(r"\b(inteira|full)\b", norm_msg):
-                    ticket_type = "FULL"
-                elif re.search(r"\b(meia|half)\b", norm_msg):
-                    ticket_type = "HALF"
-                if hold_id and ticket_type:
-                    held = self.tools.connection.execute(
-                        """
-                        SELECT s.row_label || s.seat_number AS seat_label
-                        FROM session_seats ss
-                        JOIN seats s ON s.seat_id = ss.seat_id
-                        WHERE ss.hold_id = ? AND ss.status = 'HELD'
-                        """, (hold_id,)
-                    ).fetchall()
-                    if held:
-                        types = {r["seat_label"]: ticket_type for r in held}
-                        return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
+            if types_dict:
+                return {"action": "checkout", "arguments": {"ticket_types": types_dict}, "reply": ""}
 
         # Direct payment confirmation when awaiting payment
         if current["state"] == "AWAITING_PAYMENT" and self._payment_confirmed(message):
