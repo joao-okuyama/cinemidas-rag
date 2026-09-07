@@ -190,6 +190,7 @@ class BookingAgentTools:
                     genre_key == name.casefold()
                     for name in movie["genres"]
                 )
+            ]
         # Prioritize movies that have scheduled sessions available
         candidates = sorted(
             candidates,
