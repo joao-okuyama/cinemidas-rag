@@ -9,9 +9,10 @@ const audioLabel = {
   SUBTITLED: "Legendado",
 };
 
-function sessionDate(value) {
+function sessionDate(value, timeZone) {
   const date = new Date(value);
   return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timeZone || "America/Sao_Paulo",
     weekday: "short",
     day: "2-digit",
     month: "2-digit",
@@ -20,13 +21,14 @@ function sessionDate(value) {
   }).format(date);
 }
 
-export default function SessionPicker({ sessions, selectedId, onSelect }) {
+export default function SessionPicker({ sessions, selectedId, onSelect, disabled }) {
   return (
     <div className="session-grid">
       {sessions.map((session) => (
         <button
           key={session.session_id}
           type="button"
+          disabled={disabled}
           className={`session-card ${
             selectedId === session.session_id ? "session-card--selected" : ""
           }`}
@@ -34,7 +36,7 @@ export default function SessionPicker({ sessions, selectedId, onSelect }) {
           aria-pressed={selectedId === session.session_id}
         >
           <strong>{session.cinema_name}</strong>
-          <span>{sessionDate(session.starts_at_local)}</span>
+          <span>{sessionDate(session.starts_at_local, session.timezone)}</span>
           <span>
             {session.projection_format} · {audioLabel[session.audio_version] || session.audio_version}
           </span>

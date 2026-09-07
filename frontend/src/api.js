@@ -1,43 +1,42 @@
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || "/api/v1"
-).replace(/\/$/, "");
+const BASE = (import.meta.env.VITE_API_BASE_URL || "/api/v1").replace(/\/$/, "");
+const TOKEN_KEY = "cinemidas-guest-token-v2";
+let bootstrap;
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+  const token = localStorage.getItem(TOKEN_KEY);
+  const response = await fetch(BASE + path, {
     ...options,
+    headers: { "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
   });
-
   const payload = await response.json().catch(() => ({}));
-
   if (!response.ok) {
-    throw new Error(payload.detail || "Não foi possível concluir a solicitação.");
+    const detail = payload.detail;
+    const problem = new Error(typeof detail === "string" ? detail
+      : Array.isArray(detail) ? detail.map((item) => item.msg).join("; ")
+      : "Não foi possível concluir a solicitação.");
+    problem.status = response.status;
+    throw problem;
   }
-
   return payload;
 }
+const post = (path, body) => request(path, { method: "POST", body: JSON.stringify(body) });
 
 export const bookingApi = {
-  catalog: () => request("/catalog?limit=24&only_bookable=true"),
-  sessions: (movieId) =>
-    request(`/movies/${encodeURIComponent(movieId)}/sessions?limit=100`),
-  seats: (sessionId, userId) =>
-    request(
-      `/sessions/${encodeURIComponent(sessionId)}/seats?user_id=${encodeURIComponent(userId)}`,
-    ),
-  checkout: (selection) =>
-    request("/checkout", {
-      method: "POST",
-      body: JSON.stringify(selection),
-    }),
-  pay: (orderId, payment) =>
-    request(`/orders/${encodeURIComponent(orderId)}/payments`, {
-      method: "POST",
-      body: JSON.stringify(payment),
-    }),
-  orders: (userId) =>
-    request(`/users/${encodeURIComponent(userId)}/orders`),
+  // Single-flight also avoids creating two visitors under React StrictMode.
+  bootstrap: () => bootstrap ||= post("/guest-session").then((data) => {
+    localStorage.setItem(TOKEN_KEY, data.token);
+    return data;
+  }).catch((error) => { bootstrap = undefined; throw error; }),
+  catalog: (signal) => request("/catalog?limit=24&only_bookable=true", { signal }),
+  booking: () => request("/booking"),
+  select: (selection) => post("/booking/selection", selection),
+  reset: () => post("/booking/reset"),
+  sessions: (id, signal) => request(`/movies/${encodeURIComponent(id)}/sessions?limit=100`, { signal }),
+  seats: (id) => request(`/sessions/${encodeURIComponent(id)}/seats`),
+  checkout: (selection) => post("/checkout", selection),
+  pay: (id, payment) => post(`/orders/${encodeURIComponent(id)}/payments`, payment),
+  orders: () => request("/me/orders"),
+  history: () => request("/agent/history"),
+  chat: (message, requestId) => post("/agent/chat", { message, request_id: requestId }),
 };

@@ -2,6 +2,8 @@
 
 import re
 import sqlite3
+
+from .transactions import atomic
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -51,6 +53,8 @@ def _required_identifier(value: str, name: str) -> str:
 def _seat_labels(values: list[str]) -> tuple[str, ...]:
     if not isinstance(values, list) or not values:
         raise ValueError("Informe ao menos um assento.")
+    if len(values) > 12:
+        raise ValueError("Selecione no máximo 12 assentos por pedido.")
 
     labels = []
     for value in values:
@@ -141,20 +145,10 @@ def expire_holds(
     *,
     now: datetime | None = None,
 ) -> int:
-    if connection.in_transaction:
-        raise RuntimeError(
-            "Finalize a transação atual antes de expirar reservas."
-        )
-
     now_epoch = _epoch(now)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with atomic(connection):
         expired = _expire_holds_in_transaction(connection, now_epoch)
-        connection.commit()
         return expired
-    except Exception:
-        connection.rollback()
-        raise
 
 
 def create_seat_hold(
@@ -167,11 +161,6 @@ def create_seat_hold(
     hold_seconds: int = 300,
 ) -> SeatHoldResult:
     """Reserva o grupo completo por cinco minutos ou não reserva nenhum."""
-    if connection.in_transaction:
-        raise RuntimeError(
-            "Finalize a transação atual antes de reservar assentos."
-        )
-
     user_id = _required_identifier(user_id, "user_id")
     session_id = _required_identifier(session_id, "session_id")
     labels = _seat_labels(seat_labels)
@@ -185,8 +174,7 @@ def create_seat_hold(
     hold_id = f"CV-HOLD-{uuid4().hex}"
     expires_at = now_epoch + hold_seconds
 
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with atomic(connection):
 
         session = connection.execute(
             """
@@ -273,10 +261,6 @@ def create_seat_hold(
             if updated != 1:
                 raise SeatUnavailableError([label])
 
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
 
     return SeatHoldResult(
         hold_id=hold_id,
@@ -295,17 +279,11 @@ def release_hold(
     user_id: str,
     now: datetime | None = None,
 ) -> bool:
-    if connection.in_transaction:
-        raise RuntimeError(
-            "Finalize a transação atual antes de liberar a reserva."
-        )
-
     hold_id = _required_identifier(hold_id, "hold_id")
     user_id = _required_identifier(user_id, "user_id")
     expire_holds(connection, now=now)
 
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with atomic(connection):
         hold = connection.execute(
             """
             SELECT status
@@ -318,7 +296,6 @@ def release_hold(
         if hold is None:
             raise ValueError("Reserva não encontrada para este usuário.")
         if hold["status"] != "ACTIVE":
-            connection.commit()
             return False
 
         connection.execute(
@@ -342,11 +319,7 @@ def release_hold(
             """,
             (hold_id,),
         )
-        connection.commit()
         return True
-    except Exception:
-        connection.rollback()
-        raise
 
 
 def get_seat_map(
@@ -362,8 +335,7 @@ def get_seat_map(
 
     expire_holds(connection, now=now)
 
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with atomic(connection):
         exists = connection.execute(
             "SELECT 1 FROM sessions WHERE session_id = ?",
             (session_id,),
@@ -387,10 +359,6 @@ def get_seat_map(
             """,
             (session_id,),
         ).fetchall()
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
 
     result = []
     for row in rows:

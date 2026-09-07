@@ -228,3 +228,9 @@ cinemidas-v2-*.zip
 # CineMidas React frontend
 frontend/node_modules/
 frontend/dist/
+
+# Isolated local verification (never part of a release)
+.test-deps/
+.test-temp/
+.runtime/
+*.log

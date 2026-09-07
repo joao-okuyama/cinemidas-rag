@@ -1,6 +1,9 @@
 """Fachada determinística das ações disponíveis ao agente conversacional."""
 
 import sqlite3
+import json
+
+from .transactions import atomic, transactional_method
 from datetime import datetime, timezone
 
 from .checkout import (
@@ -49,8 +52,7 @@ class BookingAgentTools:
     def _ensure_conversation(self, *, now: datetime | None) -> None:
         now_epoch = _epoch(now)
 
-        try:
-            self.connection.execute("BEGIN IMMEDIATE")
+        with atomic(self.connection):
             self.connection.execute(
                 """
                 INSERT INTO users (user_id, created_at)
@@ -89,10 +91,6 @@ class BookingAgentTools:
                     now_epoch,
                 ),
             )
-            self.connection.commit()
-        except Exception:
-            self.connection.rollback()
-            raise
 
     def state(self) -> dict:
         row = self.connection.execute(
@@ -108,6 +106,14 @@ class BookingAgentTools:
             raise RuntimeError("Estado da conversa não encontrado.")
         return dict(row)
 
+    @transactional_method
+    def remember_options(self, view: str, items: list[dict]) -> None:
+        self.connection.execute(
+            "UPDATE conversation_sessions SET displayed_options=?, revision=revision+1 WHERE conversation_id=?",
+            (json.dumps({"view": view, "items": items}, ensure_ascii=False), self.conversation_id),
+        )
+
+    @transactional_method
     def _update_state(
         self,
         state: str,
@@ -129,7 +135,7 @@ class BookingAgentTools:
                 selected_session_id = ?,
                 active_hold_id = ?,
                 active_order_id = ?,
-                updated_at = ?
+                updated_at = ?, displayed_options = '{}', revision=revision+1
             WHERE conversation_id = ? AND user_id = ?
             """,
             (
@@ -144,7 +150,6 @@ class BookingAgentTools:
                 self.user_id,
             ),
         )
-        self.connection.commit()
         return self.state()
 
     def catalog(
@@ -191,6 +196,7 @@ class BookingAgentTools:
             raise ValueError("limit deve ser um inteiro positivo.")
         return candidates[:limit]
 
+    @transactional_method
     def select_movie(
         self,
         movie_id: str,
@@ -241,6 +247,7 @@ class BookingAgentTools:
             limit=limit,
         )
 
+    @transactional_method
     def select_session(
         self,
         session_id: str,
@@ -291,6 +298,7 @@ class BookingAgentTools:
         )
         return {"seats": seats, "text": render_text_seat_map(seats)}
 
+    @transactional_method
     def hold_seats(
         self,
         seat_labels: list[str],
@@ -330,6 +338,7 @@ class BookingAgentTools:
             "expires_at": hold.expires_at,
         }
 
+    @transactional_method
     def checkout(
         self,
         ticket_types: dict[str, str],
@@ -358,6 +367,7 @@ class BookingAgentTools:
         )
         return order
 
+    @transactional_method
     def pay(
         self,
         method: str,
@@ -419,6 +429,7 @@ class BookingAgentTools:
         )
         return render_voucher(order)
 
+    @transactional_method
     def reset(self, *, now: datetime | None = None) -> dict:
         current = self.state()
         if current["active_hold_id"]:

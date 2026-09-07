@@ -1,4 +1,4 @@
-export default function SeatMap({ seats, selectedSeats, onToggle }) {
+export default function SeatMap({ seats, selectedSeats, onToggle, disabled }) {
   const rows = seats.reduce((grouped, seat) => {
     grouped[seat.row] = [...(grouped[seat.row] || []), seat];
     return grouped;
@@ -17,7 +17,7 @@ export default function SeatMap({ seats, selectedSeats, onToggle }) {
             <div className="seat-row__seats">
               {rowSeats.map((seat) => {
                 const selected = selectedSeats.includes(seat.label);
-                const unavailable = seat.status !== "AVAILABLE";
+                const unavailable = !["AVAILABLE", "SELECTED"].includes(seat.status);
 
                 return (
                   <button
@@ -26,7 +26,7 @@ export default function SeatMap({ seats, selectedSeats, onToggle }) {
                     className={`seat ${selected ? "seat--selected" : ""} ${
                       unavailable ? "seat--occupied" : ""
                     }`}
-                    disabled={unavailable}
+                    disabled={disabled || unavailable}
                     onClick={() => onToggle(seat.label)}
                     aria-pressed={selected}
                     aria-label={`Assento ${seat.label}${

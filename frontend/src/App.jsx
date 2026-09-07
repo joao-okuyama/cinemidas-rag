@@ -1,67 +1,117 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { bookingApi } from "./api";
+import AgentPanel from "./components/AgentPanel";
 import CheckoutPanel from "./components/CheckoutPanel";
 import MovieCard from "./components/MovieCard";
-import SeatMap from "./components/SeatMap";
+import SeatSelection from "./components/SeatSelection";
 import SessionPicker from "./components/SessionPicker";
+import Ticket from "./components/Ticket";
 
 const stages = ["Filme", "Sessão", "Assentos", "Pagamento"];
 
-function storedId(key, prefix) {
-  const existing = window.localStorage.getItem(key);
-  if (existing) return existing;
-  const value = `${prefix}-${crypto.randomUUID()}`;
-  window.localStorage.setItem(key, value);
-  return value;
-}
-
 export default function App() {
   const [movies, setMovies] = useState([]);
+  const [booking, setBooking] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [seats, setSeats] = useState([]);
-  const [movie, setMovie] = useState(null);
-  const [session, setSession] = useState(null);
   const [selectedSeats, setSelectedSeats] = useState([]);
   const [halfPriceSeats, setHalfPriceSeats] = useState([]);
-  const [checkout, setCheckout] = useState(null);
-  const [confirmation, setConfirmation] = useState(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [chatTurns, setChatTurns] = useState([]);
+  const [isEditingSeats, setIsEditingSeats] = useState(false);
 
-  const userId = useMemo(() => storedId("cinemidas-user-id", "WEB-USER"), []);
-  const [conversationId, setConversationId] = useState(() =>
-    `WEB-SITE-${crypto.randomUUID()}`,
-  );
-
-  const stage = confirmation || checkout ? 3 : session ? 2 : movie ? 1 : 0;
+  function applyBooking(snapshot) {
+    if (!snapshot) return;
+    setBooking(snapshot);
+    if (snapshot.sessions?.length) {
+      setSessions(snapshot.sessions);
+    }
+    if (snapshot.seats?.length) {
+      setSeats(snapshot.seats);
+    }
+    if (snapshot.order?.items?.length) {
+      setSelectedSeats(snapshot.order.items.map((item) => item.seat_label));
+      setHalfPriceSeats(
+        snapshot.order.items
+          .filter((item) => item.ticket_type === "HALF")
+          .map((item) => item.seat_label)
+      );
+    }
+  }
 
   useEffect(() => {
-    bookingApi
-      .catalog()
-      .then((response) => setMovies(response.items))
-      .catch((problem) => setError(problem.message))
-      .finally(() => setBusy(false));
+    let active = true;
+    async function bootstrap() {
+      setBusy(true);
+      setError("");
+      try {
+        const [sessionData, catalogData] = await Promise.all([
+          bookingApi.bootstrap(),
+          bookingApi.catalog(),
+        ]);
+        if (!active) return;
+        setMovies(catalogData.items || []);
+        if (sessionData.booking) {
+          applyBooking(sessionData.booking);
+        }
+        try {
+          const historyData = await bookingApi.history();
+          if (active && historyData.items) {
+            setChatTurns(historyData.items);
+          }
+        } catch {
+          // Guest history is optional on fresh visitor session
+        }
+      } catch (problem) {
+        if (active) setError(problem.message);
+      } finally {
+        if (active) setBusy(false);
+      }
+    }
+    bootstrap();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const visibleMovies = movies.filter((item) =>
-    item.title.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")),
-  );
+  const currentMovie = booking?.movie || null;
+  const currentSession = booking?.session || null;
+  const currentOrder = booking?.order || null;
+  const isConfirmed = currentOrder?.status === "CONFIRMED";
+  const isAwaitingPayment = currentOrder?.status === "AWAITING_PAYMENT";
+
+  const stage = isConfirmed || (isAwaitingPayment && !isEditingSeats)
+    ? 3
+    : currentSession
+    ? 2
+    : currentMovie
+    ? 1
+    : 0;
+
+  const visibleMovies = useMemo(() => {
+    const term = search.trim().toLocaleLowerCase("pt-BR");
+    if (!term) return movies;
+    return movies.filter((item) =>
+      item.title.toLocaleLowerCase("pt-BR").includes(term)
+    );
+  }, [movies, search]);
 
   async function chooseMovie(selected) {
     setBusy(true);
     setError("");
-    setMovie(selected);
-    setSession(null);
-    setSeats([]);
-    setSelectedSeats([]);
-    setHalfPriceSeats([]);
-    setCheckout(null);
     try {
-      const response = await bookingApi.sessions(selected.movie_id);
-      setSessions(response.items);
-      document.getElementById("sessions")?.scrollIntoView({ behavior: "smooth" });
+      const data = await bookingApi.select({ movie_id: selected.movie_id });
+      applyBooking(data.booking);
+      setSelectedSeats([]);
+      setHalfPriceSeats([]);
+      setIsEditingSeats(false);
+      setTimeout(() => {
+        document.getElementById("sessions")?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
     } catch (problem) {
       setError(problem.message);
     } finally {
@@ -72,14 +122,18 @@ export default function App() {
   async function chooseSession(selected) {
     setBusy(true);
     setError("");
-    setSession(selected);
-    setSelectedSeats([]);
-    setHalfPriceSeats([]);
-    setCheckout(null);
     try {
-      const response = await bookingApi.seats(selected.session_id, userId);
-      setSeats(response.items);
-      document.getElementById("seats")?.scrollIntoView({ behavior: "smooth" });
+      const data = await bookingApi.select({
+        movie_id: currentMovie?.movie_id || selected.movie_id,
+        session_id: selected.session_id,
+      });
+      applyBooking(data.booking);
+      setSelectedSeats([]);
+      setHalfPriceSeats([]);
+      setIsEditingSeats(false);
+      setTimeout(() => {
+        document.getElementById("seats")?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
     } catch (problem) {
       setError(problem.message);
     } finally {
@@ -93,6 +147,10 @@ export default function App() {
         setHalfPriceSeats((halves) => halves.filter((seat) => seat !== label));
         return current.filter((seat) => seat !== label);
       }
+      if (current.length >= 12) {
+        setError("Limite máximo de 12 assentos por pedido atingido.");
+        return current;
+      }
       return [...current, label];
     });
   }
@@ -101,43 +159,51 @@ export default function App() {
     setHalfPriceSeats((current) =>
       current.includes(label)
         ? current.filter((seat) => seat !== label)
-        : [...current, label],
+        : [...current, label]
     );
   }
 
   async function continueToCheckout() {
+    if (selectedSeats.length === 0) {
+      setError("Selecione pelo menos um assento.");
+      return;
+    }
     setBusy(true);
     setError("");
+    const requestId = `FLOW-${crypto.randomUUID()}`;
     try {
-      const response = await bookingApi.checkout({
-        user_id: userId,
-        conversation_id: conversationId,
-        movie_id: movie.movie_id,
-        session_id: session.session_id,
+      const data = await bookingApi.checkout({
+        movie_id: currentMovie.movie_id,
+        session_id: currentSession.session_id,
         seat_labels: selectedSeats,
         half_price_seats: halfPriceSeats,
+        request_id: requestId,
       });
-      setCheckout(response);
+      applyBooking(data.booking);
+      setIsEditingSeats(false);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (problem) {
       setError(problem.message);
-      const refreshed = await bookingApi.seats(session.session_id, userId).catch(() => null);
-      if (refreshed) setSeats(refreshed.items);
+      try {
+        const refreshed = await bookingApi.seats(currentSession.session_id);
+        if (refreshed?.items) setSeats(refreshed.items);
+      } catch {}
     } finally {
       setBusy(false);
     }
   }
 
   async function pay(method) {
+    if (!currentOrder) return;
     setBusy(true);
     setError("");
+    const idempotencyKey = `PAY-${currentOrder.order_id}-${method}-${crypto.randomUUID()}`;
     try {
-      const response = await bookingApi.pay(checkout.order.order_id, {
-        user_id: userId,
+      const data = await bookingApi.pay(currentOrder.order_id, {
         method,
-        idempotency_key: `${checkout.order.order_id}-${method}`,
+        idempotency_key: idempotencyKey,
       });
-      setConfirmation(response);
+      applyBooking(data.booking);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (problem) {
       setError(problem.message);
@@ -146,17 +212,53 @@ export default function App() {
     }
   }
 
-  function startAgain() {
-    setMovie(null);
-    setSession(null);
-    setSessions([]);
-    setSeats([]);
-    setSelectedSeats([]);
-    setHalfPriceSeats([]);
-    setCheckout(null);
-    setConfirmation(null);
-    setConversationId(`WEB-SITE-${crypto.randomUUID()}`);
+  async function handleEditSeats() {
+    setIsEditingSeats(true);
+    if (currentSession) {
+      try {
+        const refreshed = await bookingApi.seats(currentSession.session_id);
+        if (refreshed?.items) setSeats(refreshed.items);
+      } catch {}
+    }
+    setTimeout(() => {
+      document.getElementById("seats")?.scrollIntoView({ behavior: "smooth" });
+    }, 50);
+  }
+
+  async function startAgain() {
+    setBusy(true);
     setError("");
+    try {
+      const data = await bookingApi.reset();
+      applyBooking(data.booking);
+      setSelectedSeats([]);
+      setHalfPriceSeats([]);
+      setIsEditingSeats(false);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (problem) {
+      setError(problem.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendAgentMessage(text) {
+    setBusy(true);
+    setError("");
+    const requestId = `CHAT-${crypto.randomUUID()}`;
+    try {
+      const data = await bookingApi.chat(text, requestId);
+      setChatTurns((current) => [...current, { message: text, turn: data.turn }]);
+      if (data.booking) {
+        applyBooking(data.booking);
+      }
+      return true;
+    } catch (problem) {
+      setError(problem.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -167,7 +269,12 @@ export default function App() {
         </a>
         <nav aria-label="Navegação principal">
           <a href="#catalog">Em cartaz</a>
-          <button type="button" className="agent-entry" disabled title="Próxima etapa">
+          <button
+            type="button"
+            className="agent-entry"
+            onClick={() => setAgentOpen(true)}
+            title="Conversar com assistente de IA"
+          >
             ✦ Comprar com IA
           </button>
         </nav>
@@ -191,25 +298,31 @@ export default function App() {
 
         {error && <div className="error-banner" role="alert">{error}</div>}
 
-        {confirmation ? (
-          <section className="confirmation-card">
-            <span className="confirmation-card__icon">✓</span>
-            <span className="eyebrow">Pagamento simulado aprovado</span>
-            <h1>Seu lugar está garantido.</h1>
-            <p className="booking-code">{confirmation.order.booking_code}</p>
-            <div className="ticket-details">
-              <strong>{confirmation.order.movie_title}</strong>
-              <span>{confirmation.order.cinema_name} · {confirmation.order.room_name}</span>
-              <span>Assentos {confirmation.order.items.map((item) => item.seat_label).join(", ")}</span>
+        {isConfirmed ? (
+          <>
+            <Ticket order={currentOrder} />
+            <div style={{ textAlign: "center", margin: "24px 0 64px" }}>
+              <button
+                type="button"
+                className="primary-button"
+                style={{ maxWidth: "320px", display: "inline-block" }}
+                onClick={startAgain}
+              >
+                Fazer nova reserva
+              </button>
             </div>
-            <div className="mock-qr" aria-label="QR Code meramente ilustrativo">QR</div>
-            <p className="simulation-notice">SIMULAÇÃO — SEM VALIDADE</p>
-            <button type="button" className="primary-button" onClick={startAgain}>
-              Fazer nova reserva
-            </button>
-          </section>
-        ) : checkout ? (
-          <CheckoutPanel checkout={checkout} busy={busy} onPay={pay} />
+          </>
+        ) : isAwaitingPayment && !isEditingSeats ? (
+          <CheckoutPanel
+            checkout={{
+              order: currentOrder,
+              hold_expires_at: booking.hold_expires_at,
+              server_now: booking.server_now,
+            }}
+            busy={busy}
+            onPay={pay}
+            onEdit={handleEditSeats}
+          />
         ) : (
           <>
             <section className="content-section" id="catalog">
@@ -231,7 +344,7 @@ export default function App() {
                     <MovieCard
                       key={item.movie_id}
                       movie={item}
-                      selected={movie?.movie_id === item.movie_id}
+                      selected={currentMovie?.movie_id === item.movie_id}
                       onSelect={chooseMovie}
                     />
                   ))}
@@ -239,57 +352,46 @@ export default function App() {
               )}
             </section>
 
-            {movie && (
+            {currentMovie && (
               <section className="content-section selection-section" id="sessions">
                 <div className="section-heading">
-                  <div><span className="eyebrow">{movie.title}</span><h2>Escolha a sessão</h2></div>
+                  <div><span className="eyebrow">{currentMovie.title}</span><h2>Escolha a sessão</h2></div>
                 </div>
-                <SessionPicker sessions={sessions} selectedId={session?.session_id} onSelect={chooseSession} />
+                <SessionPicker
+                  sessions={sessions.length ? sessions : (booking?.sessions || [])}
+                  selectedId={currentSession?.session_id}
+                  onSelect={chooseSession}
+                  disabled={busy}
+                />
               </section>
             )}
 
-            {session && (
-              <section className="content-section selection-section" id="seats">
-                <div className="section-heading">
-                  <div><span className="eyebrow">{session.cinema_name}</span><h2>Escolha seus lugares</h2></div>
-                  <strong>{selectedSeats.length} selecionado(s)</strong>
-                </div>
-                <SeatMap seats={seats} selectedSeats={selectedSeats} onToggle={toggleSeat} />
-
-                {selectedSeats.length > 0 && (
-                  <div className="ticket-types">
-                    <div><span className="eyebrow">Ingressos</span><h2>Inteira ou meia?</h2></div>
-                    {selectedSeats.map((label) => (
-                      <div className="ticket-row" key={label}>
-                        <strong>Assento {label}</strong>
-                        <div className="segmented-control">
-                          <button
-                            type="button"
-                            className={!halfPriceSeats.includes(label) ? "active" : ""}
-                            onClick={() => halfPriceSeats.includes(label) && toggleTicketType(label)}
-                          >Inteira</button>
-                          <button
-                            type="button"
-                            className={halfPriceSeats.includes(label) ? "active" : ""}
-                            onClick={() => !halfPriceSeats.includes(label) && toggleTicketType(label)}
-                          >Meia</button>
-                        </div>
-                      </div>
-                    ))}
-                    <button
-                      type="button"
-                      className="primary-button"
-                      disabled={busy}
-                      onClick={continueToCheckout}
-                    >{busy ? "Preparando pedido…" : "Continuar"}</button>
-                    <p className="helper-text">Os lugares serão protegidos por 5 minutos ao continuar.</p>
-                  </div>
-                )}
-              </section>
+            {currentSession && (
+              <SeatSelection
+                session={currentSession}
+                seats={seats}
+                selected={selectedSeats}
+                halves={halfPriceSeats}
+                busy={busy}
+                onToggle={toggleSeat}
+                onHalf={toggleTicketType}
+                onContinue={continueToCheckout}
+              />
             )}
           </>
         )}
       </main>
+
+      {agentOpen && (
+        <AgentPanel
+          turns={chatTurns}
+          busy={busy}
+          onSend={sendAgentMessage}
+          onClose={() => setAgentOpen(false)}
+          onMovie={chooseMovie}
+          onSession={chooseSession}
+        />
+      )}
 
       <footer>
         <strong>CineMidas</strong>

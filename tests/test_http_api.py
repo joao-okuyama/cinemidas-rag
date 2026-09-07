@@ -76,6 +76,8 @@ class HttpApiTests(unittest.TestCase):
         health = client.get("/api/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["payments"], "simulated_only")
+        guest = client.post("/api/v1/guest-session").json()
+        client.headers["Authorization"] = f"Bearer {guest['token']}"
 
         catalog = client.get("/api/v1/catalog").json()["items"]
         self.assertEqual(catalog[0]["movie_id"], "TMDB-701")
@@ -94,8 +96,7 @@ class HttpApiTests(unittest.TestCase):
         checkout = client.post(
             "/api/v1/checkout",
             json={
-                "user_id": "WEB-USER-API",
-                "conversation_id": "WEB-CONV-API",
+                "request_id": "TEST-CHECKOUT-1",
                 "movie_id": "TMDB-701",
                 "session_id": session_id,
                 "seat_labels": ["F6", "F7"],
@@ -110,7 +111,6 @@ class HttpApiTests(unittest.TestCase):
         payment = client.post(
             f"/api/v1/orders/{order['order_id']}/payments",
             json={
-                "user_id": "WEB-USER-API",
                 "method": "PIX_MOCK",
                 "idempotency_key": "FRONTEND-TEST-PAYMENT-1",
             },
@@ -120,7 +120,7 @@ class HttpApiTests(unittest.TestCase):
         self.assertIn("SIMULAÇÃO — SEM VALIDADE", payment.json()["voucher"])
 
         orders = client.get(
-            "/api/v1/users/WEB-USER-API/orders"
+            "/api/v1/me/orders"
         ).json()["items"]
         self.assertEqual(len(orders), 1)
 

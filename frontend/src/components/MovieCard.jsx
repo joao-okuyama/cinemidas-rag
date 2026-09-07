@@ -1,19 +1,21 @@
-export default function MovieCard({ movie, selected, onSelect }) {
+import { ratingLabel } from "../format";
+export default function MovieCard({ movie, selected, onSelect, disabled }) {
   const details = [
     movie.runtime_minutes ? `${movie.runtime_minutes} min` : null,
-    movie.age_rating ? `${movie.age_rating} anos` : "Livre ou não informada",
+    ratingLabel(movie.age_rating),
   ].filter(Boolean);
 
   return (
     <button
       className={`movie-card ${selected ? "movie-card--selected" : ""}`}
       type="button"
+      disabled={disabled}
       onClick={() => onSelect(movie)}
       aria-pressed={selected}
     >
       <div className="movie-card__poster">
         {movie.poster_url ? (
-          <img src={movie.poster_url} alt={`Pôster de ${movie.title}`} />
+          <img src={movie.poster_url} loading="lazy" alt={`Pôster de ${movie.title}`} />
         ) : (
           <span aria-hidden="true">🎬</span>
         )}

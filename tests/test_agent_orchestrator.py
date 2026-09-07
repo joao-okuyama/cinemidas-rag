@@ -110,6 +110,7 @@ class AgentOrchestratorTests(unittest.TestCase):
     def test_first_session_is_selected_without_calling_model(self):
         self.tools.select_movie("TMDB-101", now=self.now)
         expected = self.tools.sessions(now=self.now, limit=12)[0]
+        self.tools.remember_options("sessions", self.tools.sessions(now=self.now, limit=12))
 
         def forbidden_planner(_message, _context):
             self.fail("O modelo não deve resolver uma opção ordinal simples.")

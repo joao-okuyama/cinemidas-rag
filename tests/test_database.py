@@ -274,6 +274,7 @@ class DatabaseTests(unittest.TestCase):
                 "003_booking_transactions.sql",
                 "004_order_snapshots.sql",
                 "005_conversation_sessions.sql",
+                "006_shared_web_booking.sql",
             ],
         )
 

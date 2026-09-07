@@ -1,8 +1,13 @@
 """Fluxo determinístico compartilhado pela compra tradicional do site."""
 
 from uuid import uuid4
+import hashlib
+import json
 
 from .agent_tools import BookingAgentTools
+from .checkout import get_order
+from .seat_holds import _seat_labels, expire_holds
+from .transactions import atomic
 
 
 class TraditionalBookingFlow:
@@ -58,20 +63,53 @@ class TraditionalBookingFlow:
         self,
         seat_labels: list[str],
         half_price_seats: list[str] | None = None,
+        *,
+        request_id: str | None = None,
+        movie_id: str | None = None,
+        session_id: str | None = None,
+        now=None,
     ) -> dict:
-        """Reserva os lugares e calcula o pedido em uma ação do usuário."""
-        if not seat_labels:
-            raise ValueError("Selecione pelo menos um assento.")
-
-        half_price = set(half_price_seats or [])
-        if not half_price.issubset(set(seat_labels)):
-            raise ValueError(
-                "A meia-entrada deve corresponder a um assento selecionado."
+        """One atomic operation; a retry never releases/recreates its hold."""
+        labels = _seat_labels(seat_labels)
+        if len(labels) > 12:
+            raise ValueError("Selecione no máximo 12 assentos por pedido.")
+        halves = set(_seat_labels(half_price_seats) if half_price_seats else [])
+        if not halves.issubset(labels):
+            raise ValueError("A meia-entrada deve corresponder a um assento selecionado.")
+        current = self.tools.state()
+        movie_id = movie_id or current["selected_movie_id"]
+        session_id = session_id or current["selected_session_id"]
+        selection = {label: "HALF" if label in halves else "FULL" for label in labels}
+        fingerprint = hashlib.sha256(json.dumps(
+            [movie_id, session_id, selection], sort_keys=True
+        ).encode()).hexdigest()
+        request_id = request_id or f"FLOW-{uuid4().hex}"
+        connection = self.tools.connection
+        expire_holds(connection, now=now)
+        with atomic(connection):
+            previous = connection.execute(
+                "SELECT * FROM checkout_requests WHERE user_id=? AND request_id=?",
+                (self.tools.user_id, request_id),
+            ).fetchone()
+            if previous:
+                if previous["selection_hash"] != fingerprint:
+                    raise ValueError("Esta tentativa já pertence a outra seleção.")
+                order = get_order(connection, order_id=previous["order_id"], user_id=self.tools.user_id)
+                hold = dict(connection.execute(
+                    "SELECT hold_id, expires_at FROM seat_holds WHERE hold_id=?", (order["hold_id"],)
+                ).fetchone())
+                return {"hold": hold, "order": order}
+            if movie_id != current["selected_movie_id"]:
+                self.tools.select_movie(movie_id, now=now)
+            if session_id != self.tools.state()["selected_session_id"]:
+                self.tools.select_session(session_id, now=now)
+            hold = self.tools.hold_seats(list(labels), now=now)
+            order = self.tools.checkout(selection, now=now)
+            connection.execute(
+                "INSERT INTO checkout_requests VALUES (?, ?, ?, ?)",
+                (self.tools.user_id, request_id, fingerprint, order["order_id"]),
             )
-
-        hold = self.hold(seat_labels)
-        order = self.checkout(seat_labels, list(half_price))
-        return {"hold": hold, "order": order}
+            return {"hold": hold, "order": order}
 
     def pay(self, method: str) -> dict:
         payment = self.tools.pay(

@@ -1,6 +1,8 @@
 """Checkout e pagamentos estritamente simulados do CineViva."""
 
 import sqlite3
+
+from .transactions import atomic
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -105,11 +107,6 @@ def create_order(
     now: datetime | None = None,
 ) -> dict:
     """Cria um resumo imutável para todos os assentos da reserva."""
-    if connection.in_transaction:
-        raise RuntimeError(
-            "Finalize a transação atual antes de criar o pedido."
-        )
-
     user_id = _required_identifier(user_id, "user_id")
     hold_id = _required_identifier(hold_id, "hold_id")
     selection = _ticket_selection(ticket_types)
@@ -117,8 +114,7 @@ def create_order(
     expire_holds(connection, now=now)
     order_id = f"CV-ORD-{uuid4().hex}"
 
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with atomic(connection):
 
         existing = connection.execute(
             """
@@ -146,7 +142,6 @@ def create_order(
                     "O pedido já foi criado com outra seleção de ingressos."
                 )
             order_id = existing["order_id"]
-            connection.commit()
             return get_order(
                 connection,
                 order_id=order_id,
@@ -273,10 +268,6 @@ def create_order(
             """,
             items,
         )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
 
     return get_order(connection, order_id=order_id, user_id=user_id)
 
@@ -292,11 +283,6 @@ def pay_order(
     succeed: bool = True,
 ) -> PaymentResult:
     """Executa uma tentativa fictícia; nunca recebe dados financeiros reais."""
-    if connection.in_transaction:
-        raise RuntimeError(
-            "Finalize a transação atual antes de pagar o pedido."
-        )
-
     user_id = _required_identifier(user_id, "user_id")
     order_id = _required_identifier(order_id, "order_id")
     idempotency_key = _required_identifier(
@@ -310,8 +296,7 @@ def pay_order(
     now_epoch = _epoch(now)
     expire_holds(connection, now=now)
 
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with atomic(connection):
         order = connection.execute(
             """
             SELECT o.*, h.status AS hold_status, h.expires_at
@@ -344,7 +329,6 @@ def pay_order(
                 raise ValueError(
                     "A chave de idempotência já pertence a outra operação."
                 )
-            connection.commit()
             return PaymentResult(
                 payment_id=previous["payment_id"],
                 order_id=order_id,
@@ -443,11 +427,13 @@ def pay_order(
                 """,
                 (order["hold_id"],),
             )
+            connection.execute(
+                """UPDATE conversation_sessions SET state='CONFIRMED',
+                   active_hold_id=NULL, updated_at=?, revision=revision+1
+                   WHERE user_id=? AND active_order_id=?""",
+                (now_epoch, user_id, order_id),
+            )
 
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
 
     return PaymentResult(
         payment_id=payment_id,

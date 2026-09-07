@@ -1,7 +1,7 @@
 """Teste integrado único da jornada de compra tradicional."""
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.booking.agent_tools import BookingAgentTools
 from src.booking.database import connect_database, initialize_database
@@ -17,7 +17,7 @@ class TraditionalFlowTests(unittest.TestCase):
         self.addCleanup(connection.close)
         initialize_database(connection, seed_catalog=True)
 
-        now = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
         movie = normalize_tmdb_movie(
             {
                 "id": 501,
@@ -35,7 +35,7 @@ class TraditionalFlowTests(unittest.TestCase):
                                 {
                                     "type": 3,
                                     "certification": "12",
-                                    "release_date": "2026-09-01T00:00:00Z",
+                                    "release_date": (now - timedelta(days=2)).strftime("%Y-%m-%dT00:00:00Z"),
                                 }
                             ],
                         }
