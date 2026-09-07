@@ -109,9 +109,11 @@ export default function App() {
       setSelectedSeats([]);
       setHalfPriceSeats([]);
       setIsEditingSeats(false);
-      setTimeout(() => {
-        document.getElementById("sessions")?.scrollIntoView({ behavior: "smooth" });
-      }, 50);
+      if (!agentOpen) {
+        setTimeout(() => {
+          document.getElementById("sessions")?.scrollIntoView({ behavior: "smooth" });
+        }, 50);
+      }
     } catch (problem) {
       setError(problem.message);
     } finally {
@@ -131,9 +133,11 @@ export default function App() {
       setSelectedSeats([]);
       setHalfPriceSeats([]);
       setIsEditingSeats(false);
-      setTimeout(() => {
-        document.getElementById("seats")?.scrollIntoView({ behavior: "smooth" });
-      }, 50);
+      if (!agentOpen) {
+        setTimeout(() => {
+          document.getElementById("seats")?.scrollIntoView({ behavior: "smooth" });
+        }, 50);
+      }
     } catch (problem) {
       setError(problem.message);
     } finally {
@@ -181,7 +185,9 @@ export default function App() {
       });
       applyBooking(data.booking);
       setIsEditingSeats(false);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (!agentOpen) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
     } catch (problem) {
       setError(problem.message);
       try {
@@ -204,7 +210,9 @@ export default function App() {
         idempotency_key: idempotencyKey,
       });
       applyBooking(data.booking);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (!agentOpen) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
     } catch (problem) {
       setError(problem.message);
     } finally {
@@ -220,9 +228,11 @@ export default function App() {
         if (refreshed?.items) setSeats(refreshed.items);
       } catch {}
     }
-    setTimeout(() => {
-      document.getElementById("seats")?.scrollIntoView({ behavior: "smooth" });
-    }, 50);
+    if (!agentOpen) {
+      setTimeout(() => {
+        document.getElementById("seats")?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
+    }
   }
 
   async function startAgain() {
@@ -234,7 +244,9 @@ export default function App() {
       setSelectedSeats([]);
       setHalfPriceSeats([]);
       setIsEditingSeats(false);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (!agentOpen) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
     } catch (problem) {
       setError(problem.message);
     } finally {

@@ -144,7 +144,7 @@ footer strong { color: white; }
   .summary-card__heading { flex-direction: column; }
   .seat-area { padding: 18px 12px; }
   footer { flex-direction: column; }
-  .agent-dialog { width: 100vw; height: 90vh; border-radius: 20px 20px 0 0; }
+  .agent-dialog { inset: auto 0 0 0; transform: none; width: 100vw; height: 90vh; border-radius: 20px 20px 0 0; }
 }
 
 /* Secondary button */
@@ -178,17 +178,17 @@ footer strong { color: white; }
 /* Agent Dialog & Chat */
 .agent-dialog {
   position: fixed;
-  inset: auto 0 0 auto;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
   margin: 0;
-  width: min(540px, 100vw);
-  height: min(85vh, 740px);
+  width: min(760px, 95vw);
+  height: min(90vh, 840px);
   max-width: 100vw;
   max-height: 100vh;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-top-left-radius: 20px;
-  border-bottom-left-radius: 20px;
-  box-shadow: -10px 0 40px rgba(0, 0, 0, 0.6);
+  border-radius: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.75);
   color: #f8f5ee;
   display: flex;
   flex-direction: column;
@@ -196,7 +196,7 @@ footer strong { color: white; }
   z-index: 100;
 }
 .agent-dialog::backdrop {
-  background: rgba(4, 5, 8, 0.6);
+  background: rgba(4, 5, 8, 0.65);
   backdrop-filter: blur(4px);
 }
 .agent-dialog header {
@@ -230,7 +230,7 @@ footer strong { color: white; }
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 .chat-user {
   align-self: flex-end;
@@ -262,6 +262,196 @@ footer strong { color: white; }
 }
 .chat-catalog .movie-card__body h3 {
   font-size: 0.85rem;
+}
+
+/* Chat Seat Selection */
+.chat-seat-selection {
+  margin-top: 8px;
+}
+.chat-seat-selection .seat-area {
+  padding: 16px 14px;
+  border-radius: 14px;
+  background: #10131a;
+  max-width: 100%;
+}
+.chat-seat-selection .screen {
+  margin-bottom: 24px;
+  width: 85%;
+}
+.chat-seat-selection .seat-map {
+  min-width: 540px;
+  gap: 8px;
+}
+.chat-seat-selection .seat-row {
+  gap: 8px;
+  grid-template-columns: 20px 1fr;
+}
+.chat-seat-selection .seat-row__seats {
+  grid-template-columns: repeat(12, minmax(28px, 1fr));
+  gap: 6px;
+}
+.chat-seat-selection .seat {
+  font-size: 0.68rem;
+  border-radius: 6px 6px 3px 3px;
+}
+.chat-seat-selection .seat-legend {
+  margin-top: 18px;
+  gap: 16px;
+  font-size: 0.72rem;
+}
+
+/* Chat Action Bar & Buttons */
+.chat-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.chat-action-bar span {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+.chat-action-bar .primary-button {
+  width: auto;
+  margin-top: 0;
+  padding: 10px 20px;
+  font-size: 0.88rem;
+}
+
+/* Chat Ticket Types Selection */
+.chat-ticket-types {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.chat-ticket-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.88rem;
+}
+.chat-type-buttons {
+  display: flex;
+  gap: 6px;
+  background: #080a0e;
+  padding: 3px;
+  border-radius: 8px;
+}
+.chat-type-buttons button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.chat-type-buttons button.active-type {
+  background: var(--gold);
+  color: #17120a;
+}
+.chat-type-buttons button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Chat Checkout & Payment */
+.chat-checkout {
+  margin-top: 8px;
+}
+.chat-order-summary {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+}
+.chat-price-lines {
+  display: grid;
+  gap: 8px;
+  font-size: 0.88rem;
+}
+.chat-price-lines span {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+}
+.chat-price-lines strong {
+  color: #f8f5ee;
+}
+.chat-total-line {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: white !important;
+  font-size: 1.05rem !important;
+}
+.chat-total-line strong {
+  color: var(--gold) !important;
+  font-size: 1.25rem !important;
+}
+.chat-payment-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.chat-payment-buttons .payment-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 12px 16px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+}
+.chat-payment-buttons .payment-button:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: #252b3a;
+}
+.chat-payment-buttons .payment-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chat-payment-buttons .payment-button strong {
+  color: #f8f5ee;
+  font-size: 0.88rem;
+}
+.chat-payment-buttons .payment-button span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-top: 2px;
+}
+
+/* Chat Voucher */
+.chat-voucher .confirmation-card {
+  margin: 8px 0 0;
+  max-width: 100%;
+  padding: 24px;
+}
+.chat-ascii-ticket {
+  background: #0d0f14;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  font-family: monospace;
+  font-size: 0.82rem;
+  overflow-x: auto;
+  color: #e5e7eb;
 }
 .chat-form {
   display: flex;

@@ -286,13 +286,21 @@ class BookingConversationAgent:
                 order_id=state["active_order_id"], user_id=self.tools.user_id)
 
         if state["state"] in {"DISCOVERY", "MOVIE_SELECTED"}:
+            catalog_movies = list(self.tools.catalog(limit=24, now=self.now))
+            displayed = context.get("displayed_options") or {}
+            displayed_items = displayed.get("items") or []
+            known_ids = {m["movie_id"] for m in catalog_movies}
+            for item in displayed_items:
+                if isinstance(item, dict) and item.get("movie_id") and item["movie_id"] not in known_ids:
+                    catalog_movies.append(item)
+                    known_ids.add(item["movie_id"])
             context["catalog"] = [
                 {
                     "movie_id": movie["movie_id"],
                     "title": movie["title"],
-                    "genres": movie["genres"],
+                    "genres": movie.get("genres", []),
                 }
-                for movie in self.tools.catalog(limit=12, now=self.now)
+                for movie in catalog_movies
             ]
 
         if state["selected_movie_id"]:
@@ -318,6 +326,15 @@ class BookingConversationAgent:
     @staticmethod
     def _payment_confirmed(message: str) -> bool:
         normalized = " ".join(_normalized_text(message).split()).strip(" .!")
+        if re.search(r"\b(nao|not|nunca|recuso|cancelar|cancela)\b", normalized):
+            return False
+        has_confirm = bool(re.search(
+            r"\b(confirmo|confirmar|confirmado|pode pagar|pagar|finalizar|sim|ok|quero pagar|pagamento)\b",
+            normalized,
+        ))
+        has_method = bool(re.search(r"\b(pix|cartao|credito|debito|pontos)\b", normalized))
+        if has_confirm and (has_method or re.search(r"\bpagamento\b", normalized)):
+            return True
         return bool(re.fullmatch(
             r"(?:eu )?(?:confirmo (?:o )?pagamento|confirmar pagamento|"
             r"pode pagar|pagar|finalizar pagamento|(?:i )?confirm payment|pay)"
@@ -337,6 +354,84 @@ class BookingConversationAgent:
             key = "movie_id" if displayed["view"] == "catalog" else "session_id"
             return {"action": "select_movie" if key == "movie_id" else "select_session",
                     "arguments": {key: selected[key]}, "reply": ""}
+
+        # Direct title match from displayed options (e.g. "quero dois lugares no filme do Akira")
+        if displayed.get("view") == "catalog" and "items" in displayed:
+            norm_msg = _normalized_text(message)
+            for item in sorted(displayed["items"], key=lambda m: len(m.get("title", "")), reverse=True):
+                title = item.get("title", "")
+                if title:
+                    norm_title = _normalized_text(title)
+                    if len(norm_title) >= 3 and norm_title in norm_msg:
+                        return {"action": "select_movie", "arguments": {"movie_id": item["movie_id"]}, "reply": ""}
+
+        # Direct session match from displayed options (e.g. user clicked session or said "19:30" or passed session_id)
+        if displayed.get("view") == "sessions" and "items" in displayed:
+            for item in displayed["items"]:
+                sid = item.get("session_id", "")
+                if sid and sid in message:
+                    return {"action": "select_session", "arguments": {"session_id": sid}, "reply": ""}
+                start_time = item.get("start_time", "")
+                if start_time:
+                    time_part = start_time.split("T")[-1][:5]
+                    if time_part and time_part in message:
+                        return {"action": "select_session", "arguments": {"session_id": sid}, "reply": ""}
+
+        # Direct seat selection match when session is selected (e.g. "g6 e g7" or "quero g6 e g7")
+        if current["state"] == "SESSION_SELECTED" and not current.get("active_hold_id"):
+            seat_matches = re.findall(r"\b([A-Ja-j])\s*0?([1-9]|1[0-2])\b", message)
+            if seat_matches:
+                labels = [f"{row.upper()}{num}" for row, num in seat_matches]
+                norm_msg = _normalized_text(message)
+                is_checkout = "inteira" in norm_msg or "meia" in norm_msg
+                halves = labels if ("meia" in norm_msg and "inteira" not in norm_msg) else []
+                if is_checkout:
+                    return {
+                        "action": "continue_to_checkout",
+                        "arguments": {"seat_labels": labels, "half_price_seats": halves},
+                        "reply": "",
+                    }
+                return {"action": "hold_seats", "arguments": {"seat_labels": labels}, "reply": ""}
+
+        # Direct ticket type specification when seats are held
+        if current["state"] == "SEATS_HELD":
+            norm_msg = _normalized_text(message)
+            pairs = re.findall(r"\b([A-Ja-j]\s*0?(?:[1-9]|1[0-2]))\s*[:=\-]?\s*(inteira|meia|full|half)\b", norm_msg)
+            if pairs:
+                types = {}
+                for seat, ttype in pairs:
+                    seat_cleaned = re.sub(r"\s+", "", seat).upper()
+                    types[seat_cleaned] = "HALF" if ttype in {"meia", "half"} else "FULL"
+                return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
+            if re.search(r"\b(todos|todas|ambos|ambas|tudo)\b.*\b(inteira|full)\b", norm_msg):
+                hold_id = current.get("active_hold_id")
+                if hold_id:
+                    held = self.tools.connection.execute(
+                        "SELECT seat_label FROM seat_holds WHERE hold_id = ? AND status = 'HELD'", (hold_id,)
+                    ).fetchall()
+                    if held:
+                        types = {r["seat_label"]: "FULL" for r in held}
+                        return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
+            if re.search(r"\b(todos|todas|ambos|ambas|tudo)\b.*\b(meia|half)\b", norm_msg):
+                hold_id = current.get("active_hold_id")
+                if hold_id:
+                    held = self.tools.connection.execute(
+                        "SELECT seat_label FROM seat_holds WHERE hold_id = ? AND status = 'HELD'", (hold_id,)
+                    ).fetchall()
+                    if held:
+                        types = {r["seat_label"]: "HALF" for r in held}
+                        return {"action": "checkout", "arguments": {"ticket_types": types}, "reply": ""}
+
+        # Direct payment confirmation when awaiting payment
+        if current["state"] == "AWAITING_PAYMENT" and self._payment_confirmed(message):
+            norm = _normalized_text(message)
+            method = "PIX_MOCK"
+            if "cartao" in norm or "card" in norm or "credito" in norm or "debito" in norm:
+                method = "CARD_MOCK"
+            elif "ponto" in norm or "loyalty" in norm:
+                method = "LOYALTY_MOCK"
+            return {"action": "pay", "arguments": {"method": method}, "reply": ""}
+
         return validate_decision(self.planner(message, self._context()))
 
     def handle(self, message: str) -> AgentTurn:
@@ -404,15 +499,13 @@ class BookingConversationAgent:
             text = (
                 "Sessão selecionada: "
                 f"{_format_session(session, now=self.now)}.\n\n"
-                "Escolha os assentos disponíveis:\n\n```\n"
-                + seat_map["text"]
-                + "\n```"
+                "Escolha os assentos disponíveis no mapa abaixo ou digite os assentos desejados (ex: G6 e G7):"
             )
             return AgentTurn(text, self.tools.state(), "seat_map", seat_map)
 
         if action == "seat_map":
             seat_map = self.tools.seat_map(now=self.now)
-            text = "Assentos disponíveis:\n\n```\n" + seat_map["text"] + "\n```"
+            text = "Escolha os assentos disponíveis no mapa abaixo ou digite os assentos desejados (ex: G6 e G7):"
             return AgentTurn(text, self.tools.state(), "seat_map", seat_map)
 
         if action == "hold_seats":
@@ -450,9 +543,17 @@ class BookingConversationAgent:
                     "confirmation_required",
                 )
             arguments = dict(arguments)
-            arguments["idempotency_key"] = f"PAY-{self.tools.state()['active_order_id']}-{arguments.get('method')}"
+            order_id = self.tools.state().get("active_order_id")
+            arguments["idempotency_key"] = f"PAY-{order_id}-{arguments.get('method')}"
             payment = self.tools.pay(now=self.now, **arguments)
             voucher = self.tools.voucher()
+            order_data = None
+            if order_id:
+                try:
+                    from src.booking.checkout import get_order
+                    order_data = get_order(self.tools.connection, order_id=order_id, user_id=self.tools.user_id)
+                except Exception:
+                    pass
             text = (
                 "Pagamento **simulado** aprovado. Seu ingresso:\n\n"
                 + voucher
@@ -461,7 +562,7 @@ class BookingConversationAgent:
                 text,
                 self.tools.state(),
                 "voucher",
-                {"payment": payment, "voucher": voucher},
+                {"payment": payment, "voucher": voucher, "order": order_data},
             )
 
         if action == "recent_orders":
@@ -474,8 +575,21 @@ class BookingConversationAgent:
             return AgentTurn(text, self.tools.state(), "orders", orders)
 
         if action == "voucher":
+            order_id = arguments.get("order_id") or self.tools.state().get("active_order_id")
             voucher = self.tools.voucher(**arguments)
-            return AgentTurn(voucher, self.tools.state(), "voucher", voucher)
+            order_data = None
+            if order_id:
+                try:
+                    from src.booking.checkout import get_order
+                    order_data = get_order(self.tools.connection, order_id=order_id, user_id=self.tools.user_id)
+                except Exception:
+                    pass
+            return AgentTurn(
+                voucher,
+                self.tools.state(),
+                "voucher",
+                {"voucher": voucher, "order": order_data},
+            )
 
         if action == "reset":
             state = self.tools.reset(now=self.now)
